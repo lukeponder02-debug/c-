@@ -1,6 +1,9 @@
 # c-
 Coding rec room
 
+**No Unity? Play the browser version:** open `web/paint-room.html` in any web browser
+(Chrome, Safari, Edge…). It works on computers and on phones and tablets with touch controls.
+
 A Rec Room-style starter game made in **Unity** with **C#**. You get a room with a paintball gun,
 targets to shoot, and toys you can pick up and throw.
 
