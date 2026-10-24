@@ -234,6 +234,29 @@
   }
   .tip span { line-height: 1.35; transition: opacity 0.3s; min-width: 0; }
 
+  /* ---------- Multiplayer ---------- */
+  #players {
+    position: absolute;
+    top: calc(92px + env(safe-area-inset-top, 0px));
+    right: max(16px, env(safe-area-inset-right, 0px));
+    font-size: 1rem; min-width: 150px; max-width: 220px;
+  }
+  #player-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+  #player-list li { display: flex; align-items: center; gap: 8px; }
+  #player-list .dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--ink); flex: none; }
+  #player-list .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #player-list .pts { font-variant-numeric: tabular-nums; }
+  #player-list .you { color: var(--muted); font-size: 0.8em; }
+  #hit-flash {
+    position: absolute; inset: 0; opacity: 0; transition: opacity 0.5s;
+    background: radial-gradient(circle, transparent 35%, var(--flash, var(--red)) 100%);
+  }
+  #hit-flash.show { opacity: 0.85; transition: none; }
+  .online {
+    font-weight: 700; color: var(--ink) !important;
+    background: #eef6ff; border: 2px dashed var(--blue); border-radius: 12px; padding: 6px 10px;
+  }
+
   /* ---------- Avatar ---------- */
   input { user-select: text; -webkit-user-select: text; }
   .load-hero { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 28px; }
@@ -318,6 +341,8 @@
     <div class="chip"><small>Paint</small><span id="swatch"></span></div>
     <button class="chip" id="pause-btn" type="button" hidden>Pause</button>
   </div>
+  <div id="players" class="chip" hidden><small>In the room</small><ol id="player-list"></ol></div>
+  <div id="hit-flash"></div>
   <div id="crosshair"></div>
   <div id="toast"></div>
   <div id="keys"><kbd>WASD</kbd> move · <kbd>Mouse</kbd> look · <kbd>Click</kbd> shoot / throw · <kbd>E</kbd> grab · <kbd>Q</kbd> color · <kbd>Space</kbd> jump · <kbd>Shift</kbd> sprint · <kbd>Esc</kbd> pause</div>
@@ -336,7 +361,8 @@
 <div class="overlay" id="menu" hidden>
   <div class="panel">
     <h1><span>Paint</span> <span>Room</span></h1>
-    <p>You have 60 seconds. Splat as many targets as you can. Bullseyes are worth 3 points.</p>
+    <p>You have 60 seconds. Splat as many targets as you can. Bullseyes are worth 3 points. Tag other players for 2.</p>
+    <p class="online" id="online">Playing solo. Share this page so friends can join you.</p>
     <dl class="how" id="how-desktop">
       <dt>WASD + mouse</dt><dd>Walk and look around</dd>
       <dt>Click</dt><dd>Shoot paint, or throw what you're holding</dd>
@@ -740,16 +766,22 @@
   const ballGeoSmall = new THREE.SphereGeometry(0.06, 10, 8);
   const ballMats = PAINT.map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.4 }));
 
+  // owner is 'me' for your own shots, or the other player's id for shots they fired.
+  function spawnBall(start, dir, color, owner) {
+    const mesh = new THREE.Mesh(ballGeoSmall, ballMats[color]);
+    mesh.position.copy(start);
+    scene.add(mesh);
+    balls.push({ mesh, pos: start.clone(), vel: dir.clone().multiplyScalar(45), color, life: 4, owner });
+  }
+
   function shoot() {
     const start = new V3();
     muzzle.getWorldPosition(start);
-    const hit = aimHit(80, allPaintables());
+    const hit = aimHit(80, allPaintables().concat(remoteHitboxes()));
     const aimPoint = hit ? hit.point : camPos.clone().addScaledVector(camDir, 80);
     const dir = aimPoint.sub(start).normalize();
-    const mesh = new THREE.Mesh(ballGeoSmall, ballMats[colorIndex]);
-    mesh.position.copy(start);
-    scene.add(mesh);
-    balls.push({ mesh, pos: start, vel: dir.multiplyScalar(45), color: colorIndex, life: 4 });
+    spawnBall(start, dir, colorIndex, 'me');
+    shareShot(start, dir, colorIndex);
   }
 
   function fire() {
@@ -768,18 +800,28 @@
   }
 
   function updateBalls(dt) {
-    const paintables = allPaintables();
+    // Your shots can pop targets and tag other players; other players' shots only splat the room (and you).
+    const mine = allPaintables().concat(remoteHitboxes());
+    const theirs = solidMeshes.concat(toys.filter(t => !t.held).map(t => t.mesh));
     for (let i = balls.length - 1; i >= 0; i--) {
       const b = balls[i];
       b.life -= dt;
       b.vel.y -= 0.6 * dt; // a gentle arc, small enough that the crosshair stays honest
       const step = b.vel.clone().multiplyScalar(dt);
       const len = step.length();
+      if (b.owner !== 'me' && ballHitsMe(b.pos, step)) {
+        gotSplatted(b.owner, b.color);
+        scene.remove(b.mesh);
+        balls.splice(i, 1);
+        continue;
+      }
       ray.set(b.pos, step.normalize());
       ray.far = len + 0.06;
-      const hit = ray.intersectObjects(paintables, false)[0];
+      const hit = ray.intersectObjects(b.owner === 'me' ? mine : theirs, false)[0];
       if (hit) {
-        if (hit.object.userData.target) popTarget(hit.object.userData.target, hit.object.userData.points, b.color);
+        const data = hit.object.userData;
+        if (data.target) popTarget(data.target, data.points, b.color);
+        else if (data.remote) tagPlayer(data.remote, hit.point, b.color);
         else splat(hit, b.color);
       }
       if (hit || b.life <= 0) {
@@ -839,9 +881,14 @@
       $('score').textContent = score;
       toast(points >= 3 ? '+3 Bullseye!' : '+1');
     }
-    const at = target.group.position;
+    burst(target.group.position, color, 0xff4d6d);
+  }
+
+  const burstRed = material(0xff4d6d);
+  function burst(at, color, second) {
+    const secondMat = second === 0xff4d6d ? burstRed : ballMats[color];
     for (let i = 0; i < 14; i++) {
-      const mesh = new THREE.Mesh(bitGeo, i % 2 ? ballMats[color] : material(0xff4d6d));
+      const mesh = new THREE.Mesh(bitGeo, i % 2 ? ballMats[color] : secondMat);
       mesh.position.copy(at);
       scene.add(mesh);
       const vel = new V3(Math.random() - 0.5, Math.random() * 0.8 + 0.2, Math.random() - 0.5).multiplyScalar(7);
@@ -1080,6 +1127,8 @@
       updateToys(dt);
       updateBalls(dt);
       updateTargets(dt, clock);
+      updateRemotes(dt, clock);
+      sharePresence(false);
     }
 
     renderer.render(scene, camera);
@@ -1250,6 +1299,301 @@
     });
   }
 
+  // ---------- Multiplayer ----------
+  // Everyone with this page open is in the same room. Each player shares where they are, what their
+  // avatar looks like, their score and their last few shots. Everything other players send is
+  // checked before use, since anyone can send anything.
+  let room = null;
+  const remotes = new Map(); // peer id -> other player
+  const myShots = [];
+  let shotSeq = 0;
+  let lastShared = 0, lastSharedKey = '';
+
+  const num = (v, lo, hi, fallback) => (typeof v === 'number' && isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback);
+  const hexColor = (v, fallback) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : fallback);
+  const oneOf = (v, list, fallback) => (list.includes(v) ? v : fallback);
+  const r2 = (v) => Math.round(v * 100) / 100;
+
+  function cleanAvatar(a) {
+    a = a && typeof a === 'object' ? a : {};
+    const opt = (key) => AVATAR_OPTIONS.find(o => o.key === key);
+    return {
+      skin: hexColor(a.skin, AVATAR_DEFAULT.skin),
+      shirt: hexColor(a.shirt, AVATAR_DEFAULT.shirt),
+      hairColor: hexColor(a.hairColor, AVATAR_DEFAULT.hairColor),
+      hair: oneOf(a.hair, opt('hair').choices, 'short'),
+      hat: oneOf(a.hat, opt('hat').choices, 'none'),
+      glasses: oneOf(a.glasses, opt('glasses').choices, 'none'),
+      mouth: oneOf(a.mouth, opt('mouth').choices, 'smile'),
+    };
+  }
+  function cleanName(v) {
+    return typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 16) || 'Player' : 'Player';
+  }
+
+  async function connectRoom() {
+    if (!window.claude || typeof window.claude.use !== 'function') return; // opened outside Claude: solo
+    try { room = await window.claude.use('room'); } catch (e) { room = null; }
+    if (!room) return;
+    room.onPeers(({ peers }) => syncPeers(peers), () => {
+      room = null;
+      for (const peer of [...remotes.keys()]) removeRemote(peer);
+      updatePlayerList();
+    });
+    sharePresence(true);
+  }
+
+  function sharePresence(force) {
+    if (!room) return;
+    const now = performance.now();
+    if (!force && now - lastShared < 70) return;
+    const patch = {
+      x: r2(player.pos.x), y: r2(player.pos.y), z: r2(player.pos.z), yaw: r2(yaw),
+      name: avatar.name || 'Player',
+      av: cleanAvatar(avatar),
+      score,
+      shots: myShots,
+    };
+    const key = JSON.stringify(patch);
+    if (key === lastSharedKey) return;
+    lastShared = now;
+    lastSharedKey = key;
+    room.presence(patch).catch(() => { /* dropped; the next update replaces it */ });
+  }
+
+  function shareShot(start, dir, color) {
+    myShots.push({ s: ++shotSeq, o: [r2(start.x), r2(start.y), r2(start.z)], d: [r2(dir.x), r2(dir.y), r2(dir.z)], c: color });
+    if (myShots.length > 4) myShots.shift();
+    sharePresence(true);
+  }
+
+  function syncPeers(peers) {
+    const here = new Set();
+    for (const p of peers) {
+      if (p.sameTab || p.kind !== 'viewer') continue;
+      const pres = p.presence || {};
+      if (typeof pres.x !== 'number') continue; // still loading
+      here.add(p.peer);
+      let r = remotes.get(p.peer);
+      const shots = Array.isArray(pres.shots) ? pres.shots.slice(-4) : [];
+      const newestShot = shots.reduce((m, s) => Math.max(m, num(s && s.s, 0, 1e9, 0)), 0);
+      if (!r) {
+        r = addRemote(p.peer);
+        r.lastShot = newestShot; // don't replay shots fired before we arrived
+      } else {
+        for (const s of shots) {
+          const seq = num(s && s.s, 0, 1e9, 0);
+          if (seq <= r.lastShot || !Array.isArray(s.o) || !Array.isArray(s.d)) continue;
+          const o = new V3(num(s.o[0], -16, 16, 0), num(s.o[1], -2, 10, 1), num(s.o[2], -16, 16, 0));
+          const d = new V3(num(s.d[0], -1, 1, 0), num(s.d[1], -1, 1, 0), num(s.d[2], -1, 1, 1)).normalize();
+          spawnBall(o, d, Math.floor(num(s.c, 0, PAINT.length - 1, 0)), p.peer);
+        }
+        r.lastShot = Math.max(r.lastShot, newestShot);
+      }
+      r.target.set(num(pres.x, -15, 15, 0), num(pres.y, -5, 10, 0), num(pres.z, -15, 15, 0));
+      r.yaw = num(pres.yaw, -1e4, 1e4, 0);
+      r.score = Math.floor(num(pres.score, 0, 9999, 0));
+      const name = cleanName(pres.name);
+      if (name !== r.name) { r.name = name; setNameTag(r); }
+      const av = cleanAvatar(pres.av);
+      const avKey = JSON.stringify(av);
+      if (avKey !== r.avKey) { r.avKey = avKey; r.av = av; buildRemoteModel(r); }
+    }
+    for (const peer of [...remotes.keys()]) if (!here.has(peer)) removeRemote(peer);
+    updatePlayerList();
+  }
+
+  function addRemote(peer) {
+    const root = new THREE.Group();
+    const hitbox = new THREE.Mesh(new THREE.BoxGeometry(0.75, 1.9, 0.75), new THREE.MeshBasicMaterial({ visible: false }));
+    hitbox.position.y = 0.95;
+    root.add(hitbox);
+    const tag = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true }));
+    tag.position.y = 2.25;
+    tag.scale.set(1.1, 0.28, 1);
+    root.add(tag);
+    scene.add(root);
+    const r = { peer, root, hitbox, tag, model: null, target: new V3(), yaw: 0, shownYaw: 0, placed: false,
+                name: '', score: 0, av: null, avKey: '', lastShot: 0 };
+    hitbox.userData.remote = r;
+    remotes.set(peer, r);
+    return r;
+  }
+
+  function disposeTree(obj) {
+    obj.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+    });
+  }
+
+  function removeRemote(peer) {
+    const r = remotes.get(peer);
+    if (!r) return;
+    scene.remove(r.root);
+    disposeTree(r.root);
+    remotes.delete(peer);
+  }
+
+  function remoteHitboxes() {
+    return [...remotes.values()].map(r => r.hitbox);
+  }
+
+  function setNameTag(r) {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 64;
+    const g = c.getContext('2d');
+    g.fillStyle = '#ffffff';
+    g.strokeStyle = '#1d1b3a';
+    g.lineWidth = 6;
+    g.beginPath();
+    if (g.roundRect) g.roundRect(4, 4, 248, 56, 28); else g.rect(4, 4, 248, 56);
+    g.fill(); g.stroke();
+    g.fillStyle = '#1d1b3a';
+    g.font = '32px "Lilita One", "Trebuchet MS", sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(r.name, 128, 34, 228);
+    if (r.tag.material.map) r.tag.material.map.dispose();
+    r.tag.material.map = new THREE.CanvasTexture(c);
+    r.tag.material.needsUpdate = true;
+  }
+
+  // A 3D version of the avatar maker's character: bean body, round head, floating hands.
+  function buildRemoteModel(r) {
+    if (r.model) { r.root.remove(r.model); disposeTree(r.model); }
+    const a = r.av;
+    const m = new THREE.Group();
+    const part = (geo, color, x, y, z) => {
+      const mesh = new THREE.Mesh(geo, material(color));
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      m.add(mesh);
+      return mesh;
+    };
+    const ink = 0x1d1b3a;
+    part(new THREE.CylinderGeometry(0.27, 0.32, 0.6, 20), a.shirt, 0, 0.92, 0);
+    part(new THREE.SphereGeometry(0.27, 20, 12), a.shirt, 0, 1.2, 0);
+    part(new THREE.SphereGeometry(0.32, 20, 12), a.shirt, 0, 0.64, 0).scale.y = 0.45;
+    part(new THREE.SphereGeometry(0.28, 24, 16), a.skin, 0, 1.62, 0);
+    part(new THREE.SphereGeometry(0.04, 10, 8), ink, -0.09, 1.66, -0.25);
+    part(new THREE.SphereGeometry(0.04, 10, 8), ink, 0.09, 1.66, -0.25);
+    if (a.mouth === 'smile') part(new THREE.BoxGeometry(0.11, 0.025, 0.02), ink, 0, 1.53, -0.265);
+    if (a.mouth === 'grin') part(new THREE.BoxGeometry(0.14, 0.06, 0.02), 0xffffff, 0, 1.53, -0.262);
+    if (a.mouth === 'wow') part(new THREE.SphereGeometry(0.035, 10, 8), ink, 0, 1.52, -0.26);
+    const cap = (radius, color, y) => part(new THREE.SphereGeometry(radius, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), color, 0, y, 0);
+    if (a.hair === 'short' || a.hair === 'long') cap(0.295, a.hairColor, 1.64);
+    if (a.hair === 'long') part(new THREE.BoxGeometry(0.5, 0.45, 0.14), a.hairColor, 0, 1.5, 0.2);
+    if (a.hair === 'spiky') {
+      cap(0.29, a.hairColor, 1.64);
+      for (let i = 0; i < 6; i++) {
+        const spike = part(new THREE.ConeGeometry(0.07, 0.2, 8), a.hairColor, Math.cos(i) * 0.14, 1.9, Math.sin(i) * 0.14);
+        spike.rotation.set(Math.sin(i) * 0.5, 0, -Math.cos(i) * 0.5);
+      }
+    }
+    if (a.glasses === 'round') {
+      for (const x of [-0.09, 0.09]) part(new THREE.TorusGeometry(0.055, 0.012, 8, 20), ink, x, 1.66, -0.27);
+    }
+    if (a.glasses === 'shades') {
+      for (const x of [-0.09, 0.09]) part(new THREE.BoxGeometry(0.11, 0.07, 0.02), ink, x, 1.66, -0.272);
+    }
+    if (a.hat === 'cap') {
+      cap(0.3, 0xff4d6d, 1.66);
+      part(new THREE.CylinderGeometry(0.17, 0.17, 0.02, 20), 0xff4d6d, 0, 1.67, -0.25);
+    }
+    if (a.hat === 'beanie') {
+      cap(0.305, 0xffd23f, 1.64);
+      part(new THREE.SphereGeometry(0.07, 12, 8), 0xffffff, 0, 1.96, 0);
+    }
+    if (a.hat === 'crown') {
+      const crown = part(new THREE.CylinderGeometry(0.19, 0.19, 0.16, 8, 1, true), 0xffd23f, 0, 1.92, 0);
+      crown.material.side = THREE.DoubleSide;
+    }
+    const left = part(new THREE.SphereGeometry(0.09, 14, 10), a.skin, -0.46, 1.0, -0.08);
+    const right = part(new THREE.SphereGeometry(0.09, 14, 10), a.skin, 0.46, 1.0, -0.08);
+    m.userData.hands = [left, right];
+    r.model = m;
+    r.root.add(m);
+  }
+
+  function updateRemotes(dt, time) {
+    for (const r of remotes.values()) {
+      if (!r.placed) { r.root.position.copy(r.target); r.shownYaw = r.yaw; r.placed = true; }
+      r.root.position.lerp(r.target, Math.min(1, dt * 12));
+      let diff = r.yaw - r.shownYaw;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      r.shownYaw += diff * Math.min(1, dt * 12);
+      if (r.model) {
+        r.model.rotation.y = r.shownYaw;
+        const [left, right] = r.model.userData.hands;
+        left.position.y = 1.0 + Math.sin(time * 3) * 0.04;
+        right.position.y = 1.0 + Math.sin(time * 3 + 1.5) * 0.04;
+      }
+    }
+  }
+
+  function ballHitsMe(pos, step) {
+    for (let k = 0; k <= 4; k++) {
+      const x = pos.x + step.x * k / 4, y = pos.y + step.y * k / 4, z = pos.z + step.z * k / 4;
+      if (Math.hypot(x - player.pos.x, z - player.pos.z) < 0.45 && y > player.pos.y && y < player.pos.y + 1.85) return true;
+    }
+    return false;
+  }
+
+  function gotSplatted(owner, color) {
+    const r = remotes.get(owner);
+    const flash = $('hit-flash');
+    flash.style.setProperty('--flash', PAINT[color]);
+    flash.classList.add('show');
+    setTimeout(() => flash.classList.remove('show'), 120);
+    if (state === 'playing') toast('Splatted by ' + (r ? r.name : 'someone') + '!');
+  }
+
+  function tagPlayer(r, point, color) {
+    burst(point, color);
+    if (state === 'playing') {
+      score += 2;
+      $('score').textContent = score;
+      toast('Tagged ' + r.name + '! +2');
+    }
+  }
+
+  function updatePlayerList() {
+    const others = [...remotes.values()];
+    $('online').textContent = !room
+      ? 'Playing solo. Share this page so friends can join you.'
+      : others.length === 0
+        ? 'You\'re the only one here. Share this page so friends can join!'
+        : others.length === 1 ? '1 other player is here!' : others.length + ' other players are here!';
+    $('players').hidden = others.length === 0;
+    const list = $('player-list');
+    list.textContent = '';
+    const rows = [{ name: avatar.name || 'Player', score, shirt: avatar.shirt, me: true }]
+      .concat(others.map(r => ({ name: r.name, score: r.score, shirt: r.av ? r.av.shirt : '#ffffff', me: false })))
+      .sort((a, b) => b.score - a.score);
+    for (const row of rows) {
+      const li = document.createElement('li');
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = hexColor(row.shirt, '#ffffff');
+      const who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = row.name;
+      if (row.me) {
+        const you = document.createElement('span');
+        you.className = 'you';
+        you.textContent = ' (you)';
+        who.appendChild(you);
+      }
+      const pts = document.createElement('span');
+      pts.className = 'pts';
+      pts.textContent = row.score;
+      li.append(dot, who, pts);
+      list.appendChild(li);
+    }
+  }
+  setInterval(() => { if (remotes.size) updatePlayerList(); }, 500);
+
   // ---------- Loading screen ----------
   const TIPS = [
     'Bullseyes are worth 3 points. Aim for the middle!',
@@ -1326,5 +1670,6 @@
   buildAvatarEditor();
   renderAvatars();
   runLoading();
+  connectRoom();
 })();
 </script>
