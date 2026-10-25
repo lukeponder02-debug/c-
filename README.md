@@ -14,7 +14,15 @@ and in VR headsets like the Meta Quest.
 
 VR controls: left stick walks, right stick turns, trigger shoots, grip grabs, **A** jumps,
 **B** changes paint color. Score and time show on the board above the targets.
-After changing `web/paint-room.html`, run `python3 web/build_standalone.py` to update `web/index.html`.
+
+### Bonebreak (second game)
+
+A wave-survival shooter with broken bones and gore, in `web/bonebreak.html`.
+In VR it's at `https://lukeponder02-debug.github.io/c-/web/bonebreak/` — press **Deploy in VR**.
+VR controls: left stick moves (click to sprint), right stick turns, trigger shoots, grip reloads,
+**A** jumps, **B** swaps rifle/shotgun. Health, ammo and score are on a watch on your left wrist.
+
+After changing a game, run `python3 web/build_standalone.py` to update the standalone pages.
 
 A Rec Room-style starter game made in **Unity** with **C#**. You get a room with a paintball gun,
 targets to shoot, and toys you can pick up and throw.

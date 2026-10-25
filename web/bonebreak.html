@@ -120,6 +120,7 @@
   .btn:hover { filter: brightness(1.1); }
   .btn:focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
   .warn { font-size: 0.85rem; border-left: 3px solid var(--amber); padding-left: 10px; }
+  .btn.vr { background: #2f3b52; }
 
   #touch { position: fixed; inset: 0; }
   #stick-base {
@@ -197,6 +198,8 @@
     <p class="warn">Contains blood, gore and broken bones.</p>
     <p id="best-line" hidden></p>
     <button class="btn" id="play" type="button">Deploy</button>
+    <button class="btn vr" id="enter-vr" type="button" hidden>Deploy in VR</button>
+    <p class="warn" id="vr-note" hidden></p>
   </div>
 </div>
 
@@ -461,8 +464,9 @@
     return tmpMin.x < b.max.x && tmpMax.x > b.min.x && tmpMin.y < b.max.y && tmpMax.y > b.min.y && tmpMin.z < b.max.z && tmpMax.z > b.min.z;
   }
   function updatePlayer(dt) {
-    const fwd = new V3(-Math.sin(yaw), 0, -Math.cos(yaw));
-    const right = new V3(Math.cos(yaw), 0, -Math.sin(yaw));
+    const moveYaw = vrActive ? headsetYaw() : yaw; // in VR, walk where your head points
+    const fwd = new V3(-Math.sin(moveYaw), 0, -Math.cos(moveYaw));
+    const right = new V3(Math.cos(moveYaw), 0, -Math.sin(moveYaw));
     const wish = fwd.multiplyScalar(input.z).add(right.multiplyScalar(input.x));
     if (wish.lengthSq() > 1) wish.normalize();
     wish.multiplyScalar(input.sprint ? 7.5 : 4.8);
@@ -489,9 +493,10 @@
       player.vy = 0;
     }
     recoil = Math.max(0, recoil - dt * 6);
-    head.position.set(player.pos.x, player.pos.y + 1.55, player.pos.z);
+    // In VR the headset adds your real height, so the rig sits at your feet.
+    head.position.set(player.pos.x, player.pos.y + (vrActive ? 0 : 1.55), player.pos.z);
     head.rotation.y = yaw;
-    camera.rotation.x = pitch + recoil * 0.05;
+    if (!vrActive) camera.rotation.x = pitch + recoil * 0.05;
   }
 
   // ---------- Weapons ----------
@@ -505,6 +510,7 @@
   const gunRoot = new THREE.Group();
   gunRoot.position.set(0.22, -0.22, -0.45);
   gunRoot.scale.setScalar(0.72);
+  let gunBaseZ = -0.45;
   camera.add(gunRoot);
   const gunMetal = mat(0x1f1d22, { roughness: 0.5, metalness: 0.3 });
   const gunWood = mat(0x5a3b22);
@@ -572,11 +578,21 @@
     sfx[w.sound]();
     flashTime = 0.05;
     recoil = Math.min(4, recoil + w.kick);
-    pitch = Math.min(1.5, pitch + w.kick * 0.008);
-    camera.getWorldPosition(camPos);
-    camera.getWorldDirection(camDir);
-    camRight.setFromMatrixColumn(camera.matrixWorld, 0);
-    camUp.setFromMatrixColumn(camera.matrixWorld, 1);
+    if (vrActive && gunController) {
+      // In VR you aim with the gun in your hand.
+      gunController.getWorldPosition(camPos);
+      gunController.getWorldQuaternion(aimQuat);
+      camDir.set(0, 0, -1).applyQuaternion(aimQuat);
+      camRight.set(1, 0, 0).applyQuaternion(aimQuat);
+      camUp.set(0, 1, 0).applyQuaternion(aimQuat);
+      pulse(gunController, w.pellets > 1 ? 1 : 0.45, w.pellets > 1 ? 90 : 30);
+    } else {
+      pitch = Math.min(1.5, pitch + w.kick * 0.008);
+      camera.getWorldPosition(camPos);
+      camera.getWorldDirection(camDir);
+      camRight.setFromMatrixColumn(camera.matrixWorld, 0);
+      camUp.setFromMatrixColumn(camera.matrixWorld, 1);
+    }
     const start = new V3();
     muzzle.getWorldPosition(start);
     const targets = shootables();
@@ -959,6 +975,8 @@
   }
   let bannerTimer = 0;
   function banner(text, sub) {
+    boardMsg = text;
+    boardMsgUntil = clock + 2.5;
     const el = $('banner');
     el.textContent = text;
     if (sub) { const s = document.createElement('small'); s.textContent = sub; el.appendChild(s); }
@@ -967,6 +985,8 @@
     bannerTimer = setTimeout(() => el.classList.remove('show'), 2000);
   }
   function feed(text, gold) {
+    boardMsg = text;
+    boardMsgUntil = clock + 1.5;
     const el = document.createElement('div');
     el.textContent = text;
     if (gold) el.className = 'gold';
@@ -990,6 +1010,7 @@
     player.lastHurt = clock;
     hurtFlash = Math.min(1, hurtFlash + 0.5);
     sfx.hurt();
+    if (vrActive) for (const c of controllers) pulse(c, 0.8, 120);
     updateHealthHud();
     if (player.health <= 0) die();
   }
@@ -1008,7 +1029,7 @@
   showBest();
 
   function lockPointer() {
-    if (!pointerLockWorks) return;
+    if (!pointerLockWorks || vrActive) return;
     try {
       const r = renderer.domElement.requestPointerLock();
       if (r && r.catch) r.catch(() => { pointerLockWorks = false; });
@@ -1024,6 +1045,7 @@
     debris.length = 0;
     for (const m of decals) if (m.parent) m.parent.remove(m);
     decals.length = 0;
+    deathBoard.mesh.visible = false;
     player.pos.set(0, 0, -15); player.vy = 0; player.health = 100;
     yaw = Math.PI; pitch = 0;
     score = 0; stats.kills = stats.heads = stats.bones = 0;
@@ -1061,6 +1083,7 @@
     $('s-bones').textContent = stats.bones; $('s-wave').textContent = wave; $('s-best').textContent = newBest.wave;
     show('dead', true); show('touch', false);
     showBest();
+    if (vrActive) showDeathBoard();
   }
 
   $('play').addEventListener('click', startGame);
@@ -1094,7 +1117,7 @@
     keys[e.code] = true;
   });
   window.addEventListener('keyup', (e) => { keys[e.code] = false; });
-  window.addEventListener('blur', () => { if (!isTouch) pause(); });
+  window.addEventListener('blur', () => { if (!isTouch && !vrActive) pause(); });
 
   function lookBy(dx, dy, s) {
     yaw -= dx * s;
@@ -1163,13 +1186,242 @@
   tap('t-swap', () => selectWeapon(1 - weapon));
   tap('t-jump', () => { input.jump = true; });
 
+  // ---------- Boards you can read inside VR ----------
+  // Screen menus don't show in a headset, so the game also paints its info onto things in the world:
+  // a board on the far wall, a watch on your left wrist, and a panel when you die.
+  function makeBoard(w, h, cw, ch) {
+    const canvas = document.createElement('canvas');
+    canvas.width = cw;
+    canvas.height = ch;
+    const tex = new THREE.CanvasTexture(canvas);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+    return { canvas, tex, mesh, key: '' };
+  }
+  function paintBoard(b, key, draw) {
+    if (b.key === key) return;
+    b.key = key;
+    const g = b.canvas.getContext('2d');
+    g.clearRect(0, 0, b.canvas.width, b.canvas.height);
+    draw(g, b.canvas.width, b.canvas.height);
+    b.tex.needsUpdate = true;
+  }
+  const STENCIL = '"Black Ops One", Impact, sans-serif';
+
+  const wallBoard = makeBoard(8, 1.6, 1024, 205);
+  wallBoard.mesh.position.set(0, 5.4, HALF - 0.04);
+  wallBoard.mesh.rotation.y = Math.PI;
+  scene.add(wallBoard.mesh);
+  let boardMsg = '', boardMsgUntil = 0;
+  function drawWallBoard() {
+    const msg = clock < boardMsgUntil ? boardMsg : '';
+    const top = state === 'menu' ? 'BONEBREAK' : 'WAVE ' + wave + '   ·   ' + (toSpawn + aliveCount()) + ' LEFT';
+    const bottom = msg || (state === 'dead' ? 'YOU DIED' : state === 'menu' ? 'Deploy to start' : 'SCORE ' + score);
+    paintBoard(wallBoard, top + '|' + bottom + '|' + !!msg, (g, w, h) => {
+      g.fillStyle = 'rgba(18,16,20,0.92)'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#c4161c'; g.fillRect(0, 0, w, 10);
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = '#f1ece4'; g.font = '84px ' + STENCIL; g.fillText(top, w / 2, 80, w - 40);
+      g.fillStyle = msg ? '#ffb627' : '#a39b91'; g.font = '52px ' + STENCIL; g.fillText(bottom, w / 2, 162, w - 40);
+    });
+  }
+
+  const wrist = makeBoard(0.2, 0.1, 512, 256);
+  function drawWrist() {
+    if (!vrActive) return;
+    const w = WEAPONS[weapon];
+    const hp = Math.max(0, Math.round(player.health));
+    const ammoText = reloadLeft > 0 ? 'RELOADING' : ammo[weapon] + ' / ' + w.mag;
+    paintBoard(wrist, [hp, ammoText, score, weapon].join('|'), (g, W) => {
+      g.fillStyle = 'rgba(18,16,20,0.92)'; g.fillRect(0, 0, W, 256);
+      g.fillStyle = '#c4161c'; g.fillRect(0, 0, W, 8);
+      g.fillStyle = '#a39b91'; g.font = '700 28px Barlow, sans-serif';
+      g.fillText('HEALTH', 22, 48); g.fillText(w.name.toUpperCase(), 280, 48);
+      g.fillStyle = hp <= 30 ? '#c4161c' : '#f1ece4'; g.font = '64px ' + STENCIL; g.fillText(String(hp), 22, 116);
+      g.fillStyle = reloadLeft > 0 ? '#ffb627' : '#f1ece4'; g.font = (reloadLeft > 0 ? '38px ' : '60px ') + STENCIL; g.fillText(ammoText, 280, 116);
+      g.fillStyle = 'rgba(255,255,255,0.15)'; g.fillRect(22, 140, 468, 18);
+      g.fillStyle = hp <= 30 ? '#c4161c' : '#f1ece4'; g.fillRect(22, 140, 468 * hp / 100, 18);
+      g.fillStyle = '#a39b91'; g.font = '700 28px Barlow, sans-serif'; g.fillText('SCORE', 22, 214);
+      g.fillStyle = '#f1ece4'; g.font = '44px ' + STENCIL; g.fillText(String(score), 130, 218);
+    });
+  }
+
+  const deathBoard = makeBoard(1.6, 0.8, 1024, 512);
+  deathBoard.mesh.visible = false;
+  scene.add(deathBoard.mesh);
+  function showDeathBoard() {
+    paintBoard(deathBoard, 'dead|' + [score, wave, stats.kills, stats.heads, stats.bones].join('|'), (g, W, H) => {
+      g.fillStyle = 'rgba(18,16,20,0.94)'; g.fillRect(0, 0, W, H);
+      g.fillStyle = '#c4161c'; g.fillRect(0, 0, W, 14);
+      g.textAlign = 'center';
+      g.fillStyle = '#f1ece4'; g.font = '120px ' + STENCIL; g.fillText('YOU DIED', W / 2, 150);
+      g.fillStyle = '#a39b91'; g.font = '700 46px Barlow, sans-serif';
+      g.fillText('Wave ' + wave + '   ·   Score ' + score, W / 2, 240);
+      g.fillText(stats.kills + ' kills   ·   ' + stats.heads + ' headshots   ·   ' + stats.bones + ' bones', W / 2, 310);
+      g.fillStyle = '#ffb627'; g.font = '56px ' + STENCIL; g.fillText('Pull the trigger to deploy again', W / 2, 430, W - 60);
+    });
+    renderer.xr.getCamera(camera).matrixWorld.decompose(headPos, headQuat, headScale);
+    const fwd = new V3(0, 0, -1).applyQuaternion(headQuat);
+    fwd.y = 0;
+    if (fwd.lengthSq() < 0.001) fwd.set(0, 0, -1);
+    fwd.normalize();
+    deathBoard.mesh.position.copy(headPos).addScaledVector(fwd, 2);
+    deathBoard.mesh.lookAt(headPos.x, deathBoard.mesh.position.y, headPos.z);
+    deathBoard.mesh.visible = true;
+  }
+
+  // A red glow around your head when you get shot in VR.
+  const hurtSphere = new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xc4161c, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false }));
+  hurtSphere.renderOrder = 999;
+  hurtSphere.visible = false;
+  scene.add(hurtSphere);
+  function updateHurtSphere() {
+    const o = vrActive ? Math.max(hurtFlash * 0.45, player.health < 30 && state === 'playing' ? 0.15 : 0) : 0;
+    hurtSphere.visible = o > 0.01;
+    if (!hurtSphere.visible) return;
+    renderer.xr.getCamera(camera).matrixWorld.decompose(headPos, headQuat, headScale);
+    hurtSphere.position.copy(headPos);
+    hurtSphere.material.opacity = o;
+  }
+
+  // ---------- VR (Meta Quest and other WebXR headsets) ----------
+  // Left stick moves, right stick turns, trigger shoots, grip reloads, A jumps, B swaps weapons.
+  let vrActive = false, gunController = null, wristController = null;
+  const vrPrev = { a: false, b: false, turn: 0 };
+  const aimQuat = new THREE.Quaternion(), headQuat = new THREE.Quaternion(), headPos = new V3(), headScale = new V3();
+  renderer.xr.enabled = true;
+
+  const laserGeo = new THREE.BufferGeometry().setFromPoints([new V3(0, 0, 0), new V3(0, 0, -1)]);
+  const laserMat = new THREE.LineBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.35 });
+  const controllers = [];
+  for (let i = 0; i < 2; i++) {
+    const c = renderer.xr.getController(i);
+    head.add(c);
+    controllers.push(c);
+    c.addEventListener('connected', (e) => {
+      c.userData.source = e.data;
+      if (e.data && e.data.handedness === 'left') attachWrist(c);
+      else attachGun(c);
+    });
+    c.addEventListener('disconnected', () => {
+      if (gunController === c) gunController = null;
+      if (wristController === c) wristController = null;
+    });
+    c.addEventListener('selectstart', () => {
+      if (state === 'playing') { input.firing = true; input.firePressed = true; }
+      else if (state === 'dead') startGame();
+    });
+    c.addEventListener('selectend', () => { input.firing = false; });
+    c.addEventListener('squeezestart', () => { if (state === 'playing') startReload(); });
+  }
+
+  function attachGun(c) {
+    gunController = c;
+    c.add(gunRoot);
+    gunRoot.position.set(0, -0.02, 0.08);
+    gunRoot.scale.setScalar(1);
+    gunBaseZ = 0.08;
+    if (!c.userData.laser) {
+      const laser = new THREE.Line(laserGeo, laserMat);
+      laser.scale.z = 8;
+      c.add(laser);
+      c.userData.laser = laser;
+    }
+  }
+  function attachWrist(c) {
+    wristController = c;
+    c.add(wrist.mesh);
+    wrist.mesh.position.set(0, 0.04, 0.1);
+    wrist.mesh.rotation.set(-1.0, 0, 0);
+  }
+
+  function pulse(c, strength, ms) {
+    try {
+      const gp = c && c.userData.source && c.userData.source.gamepad;
+      const motor = gp && gp.hapticActuators && gp.hapticActuators[0];
+      if (motor && motor.pulse) motor.pulse(strength, ms);
+    } catch (e) { /* no rumble on this controller */ }
+  }
+
+  function headsetYaw() {
+    renderer.xr.getCamera(camera).matrixWorld.decompose(headPos, headQuat, headScale);
+    const d = new V3(0, 0, -1).applyQuaternion(headQuat);
+    return Math.atan2(-d.x, -d.z);
+  }
+
+  function readVRInput() {
+    input.x = input.z = 0;
+    input.sprint = false;
+    const session = renderer.xr.getSession();
+    if (!session) return;
+    for (const src of session.inputSources) {
+      const gp = src.gamepad;
+      if (!gp) continue;
+      const sx = gp.axes.length >= 4 ? gp.axes[2] : (gp.axes[0] || 0);
+      const sy = gp.axes.length >= 4 ? gp.axes[3] : (gp.axes[1] || 0);
+      const pressed = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
+      if (src.handedness === 'left') {
+        if (Math.hypot(sx, sy) > 0.15) { input.x = sx; input.z = -sy; }
+        input.sprint = pressed(3); // click the stick to sprint
+      } else {
+        // Snap turn: flick the right stick to turn 30 degrees.
+        if (Math.abs(sx) > 0.6 && vrPrev.turn === 0) { yaw -= Math.sign(sx) * Math.PI / 6; vrPrev.turn = Math.sign(sx); }
+        else if (Math.abs(sx) < 0.3) vrPrev.turn = 0;
+        const a = pressed(4), b = pressed(5);
+        if (a && !vrPrev.a) input.jump = true;
+        if (b && !vrPrev.b) selectWeapon(1 - weapon);
+        vrPrev.a = a;
+        vrPrev.b = b;
+      }
+    }
+  }
+
+  async function enterVR() {
+    initAudio(); // start sound while we still have your click
+    try {
+      const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] });
+      renderer.xr.setReferenceSpaceType('local-floor');
+      await renderer.xr.setSession(session);
+      vrActive = true;
+      pitch = 0;
+      session.addEventListener('end', leaveVR);
+      startGame();
+    } catch (e) {
+      $('vr-note').textContent = 'VR couldn\'t start here. Open the game in your headset\'s web browser and try again.';
+      $('vr-note').hidden = false;
+    }
+  }
+
+  function leaveVR() {
+    vrActive = false;
+    gunController = wristController = null;
+    camera.add(gunRoot);
+    gunRoot.position.set(0.22, -0.22, -0.45);
+    gunRoot.scale.setScalar(0.72);
+    gunBaseZ = -0.45;
+    if (wrist.mesh.parent) wrist.mesh.parent.remove(wrist.mesh);
+    camera.position.set(0, 0, 0);
+    camera.quaternion.identity();
+    camera.scale.set(1, 1, 1);
+    deathBoard.mesh.visible = false;
+    input.firing = false;
+    if (state === 'playing') pause();
+  }
+
+  $('enter-vr').addEventListener('click', enterVR);
+  if (navigator.xr && navigator.xr.isSessionSupported) {
+    navigator.xr.isSessionSupported('immersive-vr').then((ok) => { $('enter-vr').hidden = !ok; }).catch(() => {});
+  }
+
   // ---------- Main loop ----------
   let last = performance.now();
   function frame(now) {
     const dt = Math.max(0, Math.min(0.033, (now - last) / 1000));
     last = now;
     if (state === 'playing') {
-      if (!isTouch) {
+      if (vrActive) {
+        readVRInput();
+      } else if (!isTouch) {
         input.x = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
         input.z = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
         input.sprint = !!(keys.ShiftLeft || keys.ShiftRight);
@@ -1204,13 +1456,15 @@
     flash.visible = flashTime > 0;
     flash.scale.setScalar(0.7 + Math.random() * 0.6);
     flashLight.intensity = flashTime > 0 ? 2.5 : 0;
-    gunRoot.position.z = -0.45 + recoil * 0.02;
+    gunRoot.position.z = gunBaseZ + recoil * 0.02;
     hurtFlash = Math.max(0, hurtFlash - dt * 1.5);
     $('hurt').style.opacity = Math.max(hurtFlash, player.health < 30 && state === 'playing' ? 0.35 : 0);
+    updateHurtSphere();
+    drawWallBoard();
+    drawWrist();
     renderer.render(scene, camera);
-    requestAnimationFrame(frame);
   }
   updatePlayer(0);
-  requestAnimationFrame(frame);
+  renderer.setAnimationLoop(frame); // works on a normal screen and inside a VR headset
 })();
 </script>
