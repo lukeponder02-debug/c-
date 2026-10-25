@@ -733,7 +733,71 @@
     if (part !== 'head' && part !== 'torso' && !e.broken[part]) breakLimb(e, part, dir);
     e.hp -= amount;
     e.lastHitDir = dir.clone();
-    if (e.hp <= 0) killEnemy(e, part === 'head', dir);
+    if (e.hp <= 0) {
+      killEnemy(e, part === 'head', dir);
+    } else {
+      // Hits pile up; enough of them in a short burst knocks the enemy off their feet.
+      e.stagger = (e.staggerT > 0 ? e.stagger : 0) + amount;
+      e.staggerT = 0.6;
+      if (e.stagger >= 30 && !(e.down > 0) && !(e.rising > 0)) knockDown(e, dir);
+    }
+  }
+
+  function knockDown(e, dir) {
+    const local = dir.clone().applyAxisAngle(UP, -e.yaw);
+    e.fallDir = local.z >= 0 ? 1 : -1;
+    e.fallFrom = e.body.rotation.x;
+    e.fromY = e.body.position.y;
+    e.fallT = 0;
+    e.down = 2.2 + Math.random() * 0.8; // seconds on the floor before getting back up
+    e.rising = 0;
+    e.stagger = 0;
+    for (const name in e.pivots) {
+      e.pivots[name].flop = { x: (Math.random() - 0.5) * 2.2, z: (Math.random() - 0.5) * 1.6, jx: Math.random() * -1.6 };
+    }
+    thump(60, 0.25, 0.5);
+    addScore(5);
+    feed('KNOCKED DOWN +5', false);
+  }
+
+  function flopLimbs(e, dt) {
+    for (const name in e.pivots) {
+      const p = e.pivots[name];
+      if (!p.flop) continue;
+      p.pivot.rotation.x += (p.flop.x - p.pivot.rotation.x) * Math.min(1, dt * 8);
+      p.pivot.rotation.z += (p.flop.z - p.pivot.rotation.z) * Math.min(1, dt * 8);
+      p.joint.rotation.x += (p.flop.jx - p.joint.rotation.x) * Math.min(1, dt * 8);
+    }
+  }
+
+  // Lying on the floor, then climbing back to their feet.
+  function updateKnockdown(e, dt) {
+    if (e.down > 0) {
+      e.fallT += dt;
+      const t = Math.min(1, e.fallT / 0.4), ease = 1 - (1 - t) * (1 - t);
+      const lying = e.fallDir * Math.PI / 2 * 0.96;
+      e.body.rotation.x = e.fallFrom + (lying - e.fallFrom) * ease;
+      e.body.position.y = e.fromY + (0.13 - e.fromY) * ease;
+      flopLimbs(e, dt);
+      e.down -= dt;
+      if (e.down <= 0) {
+        e.rising = 0.0001;
+        e.riseFrom = e.body.rotation.x;
+        e.riseFromY = e.body.position.y;
+      }
+      return;
+    }
+    e.rising += dt;
+    const t = Math.min(1, e.rising / 0.8), ease = t * t * (3 - 2 * t);
+    const standX = e.crawling ? -1.35 : 0, standY = e.crawling ? 0.18 : 0;
+    e.body.rotation.x = e.riseFrom + (standX - e.riseFrom) * ease;
+    e.body.position.y = e.riseFromY + (standY - e.riseFromY) * ease;
+    for (const name in e.pivots) {
+      const p = e.pivots[name];
+      const k = Math.max(0, 1 - dt * 6);
+      p.pivot.rotation.x *= k; p.pivot.rotation.z *= k; p.joint.rotation.x *= k;
+    }
+    if (t >= 1) { e.rising = 0; e.nextShot = Math.max(e.nextShot, 0.8); }
   }
 
   const debris = [];
@@ -759,9 +823,13 @@
       e.fountain = 1.6;
     }
     if (e.canShoot) dropGun(e);
-    // Fall away from the shot.
-    const local = dir.clone().applyAxisAngle(UP, -e.yaw);
-    e.fallDir = local.z >= 0 ? 1 : -1;
+    // Fall away from the shot (or stay down the way they already fell).
+    if (!(e.down > 0) && !(e.rising > 0)) {
+      const local = dir.clone().applyAxisAngle(UP, -e.yaw);
+      e.fallDir = local.z >= 0 ? 1 : -1;
+    }
+    e.fallFrom = e.body.rotation.x;
+    e.fromY = e.body.position.y;
     for (const name in e.pivots) {
       const p = e.pivots[name];
       p.flop = { x: (Math.random() - 0.5) * 2.2, z: (Math.random() - 0.5) * 1.6, jx: Math.random() * -1.6 };
@@ -806,15 +874,9 @@
         e.deathT += dt;
         const t = Math.min(1, e.deathT / 0.5);
         const ease = 1 - (1 - t) * (1 - t);
-        e.body.rotation.x = e.fallDir * Math.PI / 2 * 0.96 * ease;
-        e.body.position.y = 0.13 * ease;
-        for (const name in pivots) {
-          const p = pivots[name];
-          if (!p.flop) continue;
-          p.pivot.rotation.x += (p.flop.x - p.pivot.rotation.x) * Math.min(1, dt * 8);
-          p.pivot.rotation.z += (p.flop.z - p.pivot.rotation.z) * Math.min(1, dt * 8);
-          p.joint.rotation.x += (p.flop.jx - p.joint.rotation.x) * Math.min(1, dt * 8);
-        }
+        e.body.rotation.x = e.fallFrom + (e.fallDir * Math.PI / 2 * 0.96 - e.fallFrom) * ease;
+        e.body.position.y = e.fromY + (0.13 - e.fromY) * ease;
+        flopLimbs(e, dt);
         if (e.fountain > 0) {
           e.fountain -= dt;
           e.body.localToWorld(neckTmp.set(0, 1.62, 0));
@@ -828,6 +890,9 @@
         if (e.pool && e.pool.scale.x < 2.2) { const s = e.pool.scale.x + dt * 0.5; e.pool.scale.set(s, s, 1); }
         continue;
       }
+
+      if (e.staggerT > 0) e.staggerT -= dt;
+      if (e.down > 0 || e.rising > 0) { updateKnockdown(e, dt); continue; }
 
       const p = e.root.position;
       const toP = new V3(player.pos.x - p.x, 0, player.pos.z - p.z);
