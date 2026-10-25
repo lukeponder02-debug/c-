@@ -229,7 +229,7 @@
       <div><b id="s-heads">0</b><span>Headshots</span></div>
       <div><b id="s-bones">0</b><span>Bones broken</span></div>
       <div><b id="s-wave">1</b><span>Wave</span></div>
-      <div><b id="s-best">1</b><span>Best wave</span></div>
+      <div><b id="s-necks">0</b><span>Necks snapped</span></div>
     </div>
     <button class="btn" id="again" type="button">Deploy again</button>
   </div>
@@ -455,11 +455,47 @@
     shotgun: () => { noise(0.32, 1300, 0.6); thump(85, 0.18, 0.7); },
     enemy: (d) => noise(0.12, 1800, Math.max(0.03, 0.22 - d * 0.006)),
     crack: () => { noise(0.06, 3200, 0.55, 'highpass'); thump(420, 0.05, 0.35); noise(0.12, 600, 0.3); },
+    neck: () => {
+      noise(0.05, 3800, 0.8, 'highpass'); thump(520, 0.04, 0.5);
+      setTimeout(() => { noise(0.04, 3000, 0.6, 'highpass'); thump(380, 0.05, 0.4); }, 45);
+    },
     splat: () => noise(0.18, 500, 0.35),
     hit: () => thump(950, 0.04, 0.12),
     hurt: () => thump(70, 0.25, 0.5),
     click: () => noise(0.04, 4200, 0.15, 'highpass'),
   };
+
+  // A voice made in code: a buzzy tone shaped into an "ah" and bent downward, like a grunt or a scream.
+  function painSound(e) {
+    if (!audio) return;
+    const d = e.root.position.distanceTo(player.pos);
+    const vol = Math.max(0.05, 0.45 - d * 0.012);
+    const t = audio.currentTime;
+    const kind = Math.floor(Math.random() * 3); // 0 grunt, 1 yell, 2 scream
+    const dur = [0.25, 0.45, 0.65][kind];
+    const start = e.voice * [1.3, 1.6, 2.4][kind];
+    const o = audio.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(start, t);
+    o.frequency.linearRampToValueAtTime(start * 1.1, t + dur * 0.25);
+    o.frequency.exponentialRampToValueAtTime(e.voice * 0.8, t + dur);
+    const wobble = audio.createOscillator();
+    wobble.frequency.value = 6 + Math.random() * 5;
+    const wobbleDepth = audio.createGain();
+    wobbleDepth.gain.value = start * 0.04;
+    wobble.connect(wobbleDepth);
+    wobbleDepth.connect(o.frequency);
+    const f1 = audio.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = kind === 2 ? 950 : 750; f1.Q.value = 4;
+    const f2 = audio.createBiquadFilter(); f2.type = 'bandpass'; f2.frequency.value = kind === 2 ? 1600 : 1200; f2.Q.value = 5;
+    const g = audio.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol * 2.5, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(f1); o.connect(f2); f1.connect(g); f2.connect(g); g.connect(audio.destination);
+    o.start(t); wobble.start(t);
+    o.stop(t + dur + 0.05); wobble.stop(t + dur + 0.05);
+    noise(dur * 0.6, 1500, vol * 0.25, 'bandpass'); // breath
+  }
 
   // ---------- Player ----------
   const player = { pos: new V3(0, 0, -15), vy: 0, grounded: false, r: 0.35, h: 1.7, health: 100, lastHurt: -99 };
@@ -628,6 +664,10 @@
       }
     }
     if (hitEnemies.size) showHit([...hitEnemies].some(e => e.dead && e.diedAt === clock));
+    // Each enemy you hit has a 50/50 chance to cry out (once per shot, even for shotgun blasts).
+    for (const e of hitEnemies) {
+      if ((!e.dead || e.diedAt === clock) && Math.random() < 0.5) painSound(e);
+    }
     updateAmmoHud();
   }
 
@@ -653,7 +693,8 @@
     const skin = mat(pick(SKIN)), shirt = mat(pick(SHIRTS)), pants = mat(0x26252a), boots = mat(0x141316), dark = mat(0x0d0c0e);
     const e = { root, body, hp: 100, dead: false, parts: [], pivots: {}, broken: {}, yaw: 0, phase: Math.random() * 6,
       strafe: Math.random() < 0.5 ? -1 : 1, strafeTime: 2, nextShot: 1.5 + Math.random() * 1.5, canShoot: true,
-      fall: 0, fallDir: 1, fountain: 0, deathT: 0, stuck: 0, wounds: [] };
+      fall: 0, fallDir: 1, fountain: 0, deathT: 0, stuck: 0, wounds: [],
+      voice: 95 + Math.random() * 70 }; // each soldier has their own voice pitch
     const tag = (mesh, part) => { mesh.userData = { enemy: e, part }; e.parts.push(mesh); return mesh; };
 
     tag(box(0.5, 0.62, 0.28, shirt, 0, 1.27, 0, body), 'torso');
@@ -744,11 +785,8 @@
     e.lastHitDir = dir.clone();
     if (e.hp <= 0) {
       killEnemy(e, part === 'head', dir);
-    } else {
-      // Hits pile up; enough of them in a short burst knocks the enemy off their feet.
-      e.stagger = (e.staggerT > 0 ? e.stagger : 0) + amount;
-      e.staggerT = 0.6;
-      if (e.stagger >= 30 && !(e.down > 0) && !(e.rising > 0)) knockDown(e, dir);
+    } else if (!(e.down > 0)) {
+      knockDown(e, dir); // every hit puts them on the floor (or back on it if they were getting up)
     }
   }
 
@@ -760,7 +798,8 @@
     e.fallT = 0;
     e.down = 2.2 + Math.random() * 0.8; // seconds on the floor before getting back up
     e.rising = 0;
-    e.stagger = 0;
+    e.neckChecked = false;
+    e.neckBreaks = Math.random() < 0.2; // 1 in 5 falls snaps the neck when they land
     for (const name in e.pivots) {
       e.pivots[name].flop = { x: (Math.random() - 0.5) * 2.2, z: (Math.random() - 0.5) * 1.6, jx: Math.random() * -1.6 };
     }
@@ -788,6 +827,10 @@
       e.body.rotation.x = e.fallFrom + (lying - e.fallFrom) * ease;
       e.body.position.y = e.fromY + (0.13 - e.fromY) * ease;
       flopLimbs(e, dt);
+      if (t >= 1 && !e.neckChecked) {
+        e.neckChecked = true;
+        if (e.neckBreaks) { snapNeck(e); return; }
+      }
       e.down -= dt;
       if (e.down <= 0) {
         e.rising = 0.0001;
@@ -810,12 +853,23 @@
   }
 
   const debris = [];
-  function killEnemy(e, headshot, dir) {
+  // They landed badly: the head twists the wrong way and they don't get up.
+  function snapNeck(e) {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    e.head.rotation.set(0.5, side * 1.3, side * 0.7);
+    e.head.position.x += side * 0.05;
+    e.head.position.y -= 0.06;
+    sfx.neck();
+    stats.necks++;
+    killEnemy(e, false, e.lastHitDir || new V3(0, 0, 1), true);
+  }
+
+  function killEnemy(e, headshot, dir, neck) {
     e.dead = true;
     e.diedAt = clock;
     stats.kills++;
-    addScore(headshot ? 150 : 100);
-    feed(headshot ? 'HEADSHOT +150' : 'KILL +100', headshot);
+    addScore(neck ? 200 : headshot ? 150 : 100);
+    feed(neck ? 'NECK SNAPPED +200' : headshot ? 'HEADSHOT +150' : 'KILL +100', headshot || neck);
     if (headshot) {
       stats.heads++;
       // The head comes off.
@@ -999,7 +1053,7 @@
 
   // ---------- Waves ----------
   let wave = 0, toSpawn = 0, spawnTimer = 0, waveBreak = 0, score = 0;
-  const stats = { kills: 0, heads: 0, bones: 0 };
+  const stats = { kills: 0, heads: 0, bones: 0, necks: 0 };
   function aliveCount() { return enemies.filter(e => !e.dead).length; }
   function startWave(n) {
     wave = n;
@@ -1122,7 +1176,7 @@
     deathBoard.mesh.visible = false;
     player.pos.set(0, 0, -15); player.vy = 0; player.health = 100;
     yaw = Math.PI; pitch = 0;
-    score = 0; stats.kills = stats.heads = stats.bones = 0;
+    score = 0; stats.kills = stats.heads = stats.bones = stats.necks = 0;
     $('score').textContent = '0';
     WEAPONS.forEach((w, i) => { ammo[i] = w.mag; });
     reloadLeft = 0; weapon = 1; selectWeaponForce(0);
@@ -1152,9 +1206,9 @@
     const best = readBest();
     const newBest = { wave: Math.max(best.wave, wave), score: Math.max(best.score, score) };
     saveBest(newBest);
-    $('dead-line').textContent = 'You made it to wave ' + wave + '.' + (wave >= best.wave && wave > 0 && score >= best.score ? ' New best!' : '');
+    $('dead-line').textContent = 'You made it to wave ' + wave + '.' + (wave >= best.wave && wave > 0 && score >= best.score ? ' New best!' : ' Your best is wave ' + newBest.wave + '.');
     $('s-score').textContent = score; $('s-kills').textContent = stats.kills; $('s-heads').textContent = stats.heads;
-    $('s-bones').textContent = stats.bones; $('s-wave').textContent = wave; $('s-best').textContent = newBest.wave;
+    $('s-bones').textContent = stats.bones; $('s-wave').textContent = wave; $('s-necks').textContent = stats.necks;
     show('dead', true); show('touch', false);
     showBest();
     if (vrActive) showDeathBoard();
@@ -1330,7 +1384,7 @@
       g.fillStyle = '#f1ece4'; g.font = '120px ' + STENCIL; g.fillText('YOU DIED', W / 2, 150);
       g.fillStyle = '#a39b91'; g.font = '700 46px Barlow, sans-serif';
       g.fillText('Wave ' + wave + '   ·   Score ' + score, W / 2, 240);
-      g.fillText(stats.kills + ' kills   ·   ' + stats.heads + ' headshots   ·   ' + stats.bones + ' bones', W / 2, 310);
+      g.fillText(stats.kills + ' kills  ·  ' + stats.heads + ' headshots  ·  ' + stats.bones + ' bones  ·  ' + stats.necks + ' necks', W / 2, 310, W - 60);
       g.fillStyle = '#ffb627'; g.font = '56px ' + STENCIL; g.fillText('Pull the trigger to deploy again', W / 2, 430, W - 60);
     });
     renderer.xr.getCamera(camera).matrixWorld.decompose(headPos, headQuat, headScale);
