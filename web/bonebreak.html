@@ -121,6 +121,31 @@
   .btn:focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; }
   .warn { font-size: 0.85rem; border-left: 3px solid var(--amber); padding-left: 10px; }
   .btn.vr { background: #2f3b52; }
+  .btn.ghost { background: transparent; border: 1px solid var(--line); font-size: 1.1rem; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mode {
+    display: grid; gap: 2px; text-align: left; cursor: pointer; padding: 10px 12px;
+    background: transparent; color: var(--ink); border: 1px solid var(--line); font-family: var(--body);
+  }
+  .mode b { font-family: var(--display); font-weight: 400; font-size: 1.2rem; }
+  .mode span { font-size: 0.85rem; color: var(--muted); }
+  .mode.on { border-color: var(--blood); background: rgba(196, 22, 28, 0.14); }
+  .mode:focus-visible, .spawn-card:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+  .panel.wide { width: min(680px, 100%); }
+  .spawn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+  .spawn-card {
+    display: grid; justify-items: center; gap: 4px; padding: 12px 8px; cursor: pointer; text-align: center;
+    background: rgba(255, 255, 255, 0.04); color: var(--ink); border: 1px solid var(--line); font-family: var(--body);
+  }
+  .spawn-card svg { width: 44px; height: 52px; }
+  .spawn-card b { font-family: var(--display); font-weight: 400; font-size: 1rem; }
+  .spawn-card span { font-size: 0.8rem; color: var(--muted); line-height: 1.3; }
+  .spawn-card.on { border-color: #5ef2ff; background: rgba(94, 242, 255, 0.1); }
+  .toggles { display: grid; gap: 8px; font-size: 0.95rem; }
+  .toggles label { display: flex; gap: 10px; align-items: center; cursor: pointer; }
+  .toggles input { width: 18px; height: 18px; accent-color: var(--blood); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row .btn { flex: 1; min-width: 140px; }
 
   #touch { position: fixed; inset: 0; }
   #stick-base {
@@ -153,9 +178,9 @@
 
 <div id="hud" hidden>
   <div id="top">
-    <div><span class="label">Wave</span><span class="stat" id="wave">1</span></div>
+    <div><span class="label" id="lbl-wave">Wave</span><span class="stat" id="wave">1</span></div>
     <div><span class="label">Score</span><span class="stat" id="score">0</span></div>
-    <div><span class="label">Left</span><span class="stat" id="left">0</span></div>
+    <div><span class="label" id="lbl-left">Left</span><span class="stat" id="left">0</span></div>
   </div>
   <div id="feed"></div>
   <div id="crosshair"><i></i><i></i><i></i><i></i></div>
@@ -171,6 +196,7 @@
 <div id="touch" hidden>
   <div id="stick-base" hidden><div id="stick-knob"></div></div>
   <div id="touch-buttons">
+    <button class="tbtn" id="t-menu" type="button" hidden>Spawn</button>
     <button class="tbtn" id="t-swap" type="button">Swap</button>
     <button class="tbtn" id="t-reload" type="button">Reload</button>
     <button class="tbtn" id="t-jump" type="button">Jump</button>
@@ -189,6 +215,7 @@
       <dt>1 / 2 or Q</dt><dd>Rifle / shotgun</dd>
       <dt>Space / Shift</dt><dd>Jump / sprint</dd>
       <dt>Esc</dt><dd>Pause</dd>
+      <dt>3 / E</dt><dd>Spawn gun / spawn menu (sandbox)</dd>
     </dl>
     <dl class="how" id="how-touch" hidden>
       <dt>Left thumb</dt><dd>Drag to move</dd>
@@ -197,9 +224,29 @@
     </dl>
     <p class="warn">Contains blood, gore and broken bones.</p>
     <p id="best-line" hidden></p>
+    <div class="modes" role="radiogroup" aria-label="Game mode">
+      <button class="mode on" data-mode="waves" type="button" role="radio" aria-checked="true"><b>Waves</b><span>Survive endless soldiers</span></button>
+      <button class="mode" data-mode="sandbox" type="button" role="radio" aria-checked="false"><b>Sandbox</b><span>Spawn gun, no rules</span></button>
+    </div>
     <button class="btn" id="play" type="button">Deploy</button>
     <button class="btn vr" id="enter-vr" type="button" hidden>Deploy in VR</button>
     <p class="warn" id="vr-note" hidden></p>
+  </div>
+</div>
+
+<div class="overlay" id="spawn-menu" hidden>
+  <div class="panel wide">
+    <h2>Spawn menu</h2>
+    <p>Pick something, then hold fire with the spawn gun to see where it goes. Let go to spawn it. Press R while aiming at something to remove it.</p>
+    <div class="spawn-grid" id="spawn-grid"></div>
+    <div class="toggles">
+      <label><input type="checkbox" id="opt-god" checked> God mode (you can't die)</label>
+      <label><input type="checkbox" id="opt-shoot" checked> Soldiers shoot back</label>
+    </div>
+    <div class="row">
+      <button class="btn ghost" id="clear-all" type="button">Clear everything</button>
+      <button class="btn" id="close-spawn" type="button">Done</button>
+    </div>
   </div>
 </div>
 
@@ -430,6 +477,7 @@
     const src = audio.createBufferSource(); src.buffer = noiseBuf;
     const f = audio.createBiquadFilter(); f.type = type || 'lowpass'; f.frequency.value = freq;
     const g = audio.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.loop = true; // long sounds (explosions) outlast the noise buffer
     src.connect(f); f.connect(g); g.connect(audio.destination);
     src.start(t); src.stop(t + dur + 0.05);
   }
@@ -539,6 +587,7 @@
   const WEAPONS = [
     { name: 'Rifle', mag: 30, reload: 1.6, rate: 0.095, auto: true, pellets: 1, spread: 0.01, dmg: { head: 100, torso: 34, limb: 22 }, kick: 0.6, sound: 'rifle' },
     { name: 'Shotgun', mag: 6, reload: 2.1, rate: 0.75, auto: false, pellets: 9, spread: 0.065, dmg: { head: 55, torso: 18, limb: 14 }, kick: 2.2, sound: 'shotgun' },
+    { name: 'Spawn Gun', spawner: true, mag: 1, reload: 0, rate: 0.25, auto: false, pellets: 0, spread: 0, dmg: null, kick: 0, sound: null }, // sandbox only
   ];
   const ammo = WEAPONS.map(w => w.mag);
   let weapon = 0, nextShot = 0, reloadLeft = 0;
@@ -565,6 +614,18 @@
   const sStock = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.12, 0.22), gunWood); sStock.position.set(0, -0.03, 0.28); shotgun.add(sStock);
   shotgun.visible = false;
   gunRoot.add(rifle, shotgun);
+  // The sandbox spawn gun: a chunky tool with a glowing emitter.
+  const glow = new THREE.MeshBasicMaterial({ color: 0x5ef2ff });
+  const spawnerModel = new THREE.Group();
+  spawnerModel.add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.13, 0.42), mat(0x2a2d33, { roughness: 0.4, metalness: 0.4 })));
+  const emitter = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 0.16, 12), glow);
+  emitter.rotation.x = Math.PI / 2; emitter.position.set(0, 0.01, -0.28); spawnerModel.add(emitter);
+  const glowStrip = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.02, 0.3), glow);
+  glowStrip.position.set(0, 0.03, 0); spawnerModel.add(glowStrip);
+  const spawnerGrip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 0.07), mat(0x1a1b1f));
+  spawnerGrip.position.set(0, -0.12, 0.1); spawnerGrip.rotation.x = 0.25; spawnerModel.add(spawnerGrip);
+  spawnerModel.visible = false;
+  gunRoot.add(spawnerModel);
   const muzzle = new THREE.Object3D(); muzzle.position.set(0, 0.025, -0.6); gunRoot.add(muzzle);
   const flash = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffd27a }));
   flash.visible = false; muzzle.add(flash);
@@ -589,18 +650,25 @@
     }
   }
 
+  function showWeaponModel(i) {
+    rifle.visible = i === 0;
+    shotgun.visible = i === 1;
+    spawnerModel.visible = i === 2;
+    gunRoot.rotation.x = 0;
+  }
   function selectWeapon(i) {
-    if (i === weapon || state !== 'playing') return;
+    if (i === weapon || state !== 'playing' || i >= availableWeapons()) return;
     weapon = i;
     reloadLeft = 0;
     nextShot = performance.now() / 1000 + 0.25;
-    rifle.visible = i === 0;
-    shotgun.visible = i === 1;
+    showWeaponModel(i);
+    cancelSpawnPreview();
     sfx.click();
     updateAmmoHud();
   }
   function startReload() {
     const w = WEAPONS[weapon];
+    if (w.spawner) { removeAimed(); return; } // with the spawn gun, R removes what you're aiming at
     if (reloadLeft > 0 || ammo[weapon] === w.mag) return;
     reloadLeft = w.reload;
     sfx.click();
@@ -648,6 +716,8 @@
       if (data.enemy) {
         hitEnemy(data.enemy, data.part, hit.point, dir, w.dmg);
         hitEnemies.add(data.enemy);
+      } else if (data.prop && data.prop.kind === 'barrel') {
+        explodeBarrel(data.prop);
       } else {
         const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
         addDecal(holeMat, hit.point, n, 0.09);
@@ -676,14 +746,20 @@
     return m;
   }
 
-  function makeEnemy(x, z) {
+  // type: 'soldier' (default), 'heavy' (bigger, 250 HP, slower) or 'dummy' (unarmed, stands still)
+  function makeEnemy(x, z, type) {
+    const dummy = type === 'dummy', heavy = type === 'heavy';
     const root = new THREE.Group();
     root.position.set(x, 0, z);
+    if (heavy) root.scale.setScalar(1.25);
     const body = new THREE.Group();
     root.add(body);
-    const skin = mat(pick(SKIN)), shirt = mat(pick(SHIRTS)), pants = mat(0x26252a), boots = mat(0x141316), dark = mat(0x0d0c0e);
-    const e = { root, body, hp: 100, dead: false, parts: [], pivots: {}, broken: {}, yaw: 0, phase: Math.random() * 6,
-      strafe: Math.random() < 0.5 ? -1 : 1, strafeTime: 2, nextShot: 1.5 + Math.random() * 1.5, canShoot: true,
+    const skin = dummy ? mat(0xe8c547) : mat(pick(SKIN));
+    const shirt = dummy ? mat(0xe8c547) : heavy ? mat(0x3a1f1f) : mat(pick(SHIRTS));
+    const pants = mat(dummy ? 0xd6b23a : 0x26252a), boots = mat(0x141316), dark = mat(0x0d0c0e);
+    const e = { root, body, hp: heavy ? 250 : 100, dead: false, parts: [], pivots: {}, broken: {}, yaw: 0, phase: Math.random() * 6,
+      strafe: Math.random() < 0.5 ? -1 : 1, strafeTime: 2, nextShot: 1.5 + Math.random() * 1.5,
+      canShoot: !dummy, passive: dummy, speedMul: heavy ? 0.75 : 1,
       fall: 0, fallDir: 1, fountain: 0, deathT: 0, stuck: 0, wounds: [],
       voice: 95 + Math.random() * 70 }; // each soldier has their own voice pitch
     const tag = (mesh, part) => { mesh.userData = { enemy: e, part }; e.parts.push(mesh); return mesh; };
@@ -714,13 +790,17 @@
     limb('legR', 1, 0.13, 0.42, pants, pants, 0.84, boots);
     limb('legL', -1, 0.13, 0.42, pants, pants, 0.84, boots);
 
-    const gun = new THREE.Group();
-    gun.position.set(0, -0.32, -0.02);
-    box(0.06, 0.12, 0.5, gunMetal, 0, 0, -0.18, gun);
-    gun.rotation.x = -Math.PI / 2; // points along the forearm
-    handR.add(gun);
-    const gm = new THREE.Object3D(); gm.position.set(0, 0, -0.45); gun.add(gm);
-    e.gun = gun; e.gunMuzzle = gm;
+    if (dummy) {
+      box(0.2, 0.2, 0.02, dark, 0, 1.32, -0.15, body); // crash-test-dummy chest marker
+    } else {
+      const gun = new THREE.Group();
+      gun.position.set(0, -0.32, -0.02);
+      box(0.06, 0.12, 0.5, gunMetal, 0, 0, -0.18, gun);
+      gun.rotation.x = -Math.PI / 2; // points along the forearm
+      handR.add(gun);
+      const gm = new THREE.Object3D(); gm.position.set(0, 0, -0.45); gun.add(gm);
+      e.gun = gun; e.gunMuzzle = gm;
+    }
 
     scene.add(root);
     enemies.push(e);
@@ -855,14 +935,15 @@
     killEnemy(e, false, e.lastHitDir || new V3(0, 0, 1), true);
   }
 
-  function killEnemy(e, headshot, dir, neck) {
+  // blast: true for an explosion kill, 'gib' for one close enough to take the head off
+  function killEnemy(e, headshot, dir, neck, blast) {
     e.dead = true;
     e.diedAt = clock;
     stats.kills++;
-    addScore(neck ? 200 : headshot ? 150 : 100);
-    feed(neck ? 'NECK SNAPPED +200' : headshot ? 'HEADSHOT +150' : 'KILL +100', headshot || neck);
-    if (headshot) {
-      stats.heads++;
+    addScore(neck ? 200 : headshot ? 150 : blast ? 120 : 100);
+    feed(neck ? 'NECK SNAPPED +200' : headshot ? 'HEADSHOT +150' : blast ? 'BLOWN UP +120' : 'KILL +100', !!(headshot || neck || blast));
+    if (headshot) stats.heads++;
+    if (headshot || blast === 'gib') {
       // The head comes off.
       const h = e.head;
       const wp = new V3(), wq = new THREE.Quaternion();
@@ -894,6 +975,8 @@
   const corpses = [];
 
   function removeEnemy(e) {
+    const ci = corpses.indexOf(e);
+    if (ci >= 0) corpses.splice(ci, 1);
     scene.remove(e.root);
     e.root.traverse(o => { if (o.geometry) o.geometry.dispose(); });
     const i = enemies.indexOf(e);
@@ -948,6 +1031,21 @@
       if (e.staggerT > 0) e.staggerT -= dt;
       if (e.down > 0 || e.rising > 0) { updateKnockdown(e, dt); continue; }
 
+      if (e.passive) { // dummies just stand there (with whatever you've broken)
+        for (const name in pivots) {
+          const l = pivots[name], arm = name.startsWith('arm');
+          if (e.broken[name]) {
+            if (arm) { l.pivot.rotation.set(0.1, 0, l.side * 0.25); l.joint.rotation.set(1.3, 0, l.side * 0.7); }
+            else { l.pivot.rotation.set(0.15, 0, l.side * 0.2); l.joint.rotation.set(-0.3, 0, l.side * 0.95); }
+          } else {
+            l.pivot.rotation.set(0, 0, arm ? l.side * 0.12 : 0);
+            l.joint.rotation.set(0, 0, 0);
+          }
+        }
+        e.root.rotation.y = e.yaw;
+        continue;
+      }
+
       const p = e.root.position;
       const toP = new V3(player.pos.x - p.x, 0, player.pos.z - p.z);
       const dist = toP.length();
@@ -960,7 +1058,7 @@
       else if (dist < 5) move.copy(toward).multiplyScalar(-0.6);
       else move.copy(side).multiplyScalar(e.strafe * 0.7).addScaledVector(toward, 0.3);
       const legsBroken = (e.broken.legL ? 1 : 0) + (e.broken.legR ? 1 : 0);
-      const speed = e.crawling ? 0.55 : legsBroken ? 1.3 : 2.7;
+      const speed = (e.crawling ? 0.55 : legsBroken ? 1.3 : 2.7) * e.speedMul;
       const before = p.clone();
       if (state === 'playing') moveEnemy(e, move.x * speed * dt, move.z * speed * dt);
       const moved = p.distanceTo(before) / Math.max(dt, 0.001);
@@ -994,7 +1092,7 @@
       else { al.pivot.rotation.set(e.crawling ? 2.4 : 1.2, 0, -0.5); al.joint.rotation.set(0, 0, 0); }
 
       // Shooting
-      if (state !== 'playing' || !e.canShoot) continue;
+      if (state !== 'playing' || !e.canShoot || (mode === 'sandbox' && !aiShoots)) continue;
       e.nextShot -= dt;
       if (e.nextShot > 0) continue;
       e.nextShot = 0.9 + Math.random() * 1.5;
@@ -1054,7 +1152,7 @@
     $('wave').textContent = n;
   }
   function updateWaves(dt) {
-    if (state !== 'playing') return;
+    if (state !== 'playing' || mode !== 'waves') return;
     if (waveBreak > 0) {
       waveBreak -= dt;
       if (waveBreak <= 0) startWave(wave + 1);
@@ -1083,6 +1181,11 @@
   function updateAmmoHud() {
     const w = WEAPONS[weapon];
     $('weapon-name').textContent = w.name;
+    if (w.spawner) {
+      $('ammo-num').textContent = SPAWNABLES[spawnIndex].name;
+      $('ammo').classList.remove('reloading');
+      return;
+    }
     $('ammo-num').innerHTML = reloadLeft > 0 ? 'RELOADING' : ammo[weapon] + ' <small>/ ' + w.mag + '</small>';
     $('ammo').classList.toggle('reloading', reloadLeft > 0);
   }
@@ -1125,6 +1228,7 @@
   let hurtFlash = 0;
   function hurtPlayer(amount, from) {
     if (state !== 'playing') return;
+    if (mode === 'sandbox' && godMode) { hurtFlash = Math.min(1, hurtFlash + 0.2); return; }
     player.health -= amount;
     player.lastHurt = clock;
     hurtFlash = Math.min(1, hurtFlash + 0.5);
@@ -1170,17 +1274,23 @@
     score = 0; stats.kills = stats.heads = stats.bones = stats.necks = 0;
     $('score').textContent = '0';
     WEAPONS.forEach((w, i) => { ammo[i] = w.mag; });
-    reloadLeft = 0; weapon = 1; selectWeaponForce(0);
-    waveBreak = 0;
+    clearProps();
+    reloadLeft = 0;
+    waveBreak = 0; toSpawn = 0; wave = 0;
+    selectWeaponForce(mode === 'sandbox' ? 2 : 0);
     updateHealthHud();
+    $('lbl-wave').textContent = mode === 'sandbox' ? 'Mode' : 'Wave';
+    $('lbl-left').textContent = mode === 'sandbox' ? 'Alive' : 'Left';
+    show('t-menu', mode === 'sandbox');
     resume();
-    startWave(1);
+    if (mode === 'sandbox') startSandbox();
+    else startWave(1);
   }
-  function selectWeaponForce(i) { weapon = i; rifle.visible = i === 0; shotgun.visible = i === 1; updateAmmoHud(); }
+  function selectWeaponForce(i) { weapon = i; reloadLeft = 0; showWeaponModel(i); cancelSpawnPreview(); updateAmmoHud(); }
 
   function resume() {
     state = 'playing';
-    show('menu', false); show('paused', false); show('dead', false);
+    show('menu', false); show('paused', false); show('dead', false); show('spawn-menu', false);
     show('hud', true); show('touch', isTouch);
     lockPointer();
   }
@@ -1194,10 +1304,14 @@
     state = 'dead';
     if (document.pointerLockElement) document.exitPointerLock();
     clearInputs();
-    const best = readBest();
-    const newBest = { wave: Math.max(best.wave, wave), score: Math.max(best.score, score) };
-    saveBest(newBest);
-    $('dead-line').textContent = 'You made it to wave ' + wave + '.' + (wave >= best.wave && wave > 0 && score >= best.score ? ' New best!' : ' Your best is wave ' + newBest.wave + '.');
+    if (mode === 'sandbox') {
+      $('dead-line').textContent = 'You died in sandbox mode. Turn on God mode in the spawn menu to stay alive.';
+    } else {
+      const best = readBest();
+      const newBest = { wave: Math.max(best.wave, wave), score: Math.max(best.score, score) };
+      saveBest(newBest);
+      $('dead-line').textContent = 'You made it to wave ' + wave + '.' + (wave >= best.wave && wave > 0 && score >= best.score ? ' New best!' : ' Your best is wave ' + newBest.wave + '.');
+    }
     $('s-score').textContent = score; $('s-kills').textContent = stats.kills; $('s-heads').textContent = stats.heads;
     $('s-bones').textContent = stats.bones; $('s-wave').textContent = wave; $('s-necks').textContent = stats.necks;
     show('dead', true); show('touch', false);
@@ -1223,15 +1337,22 @@
     stick.id = null; look.id = null; show('stick-base', false); dragging = false;
   }
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') e.preventDefault();
-    if (e.code === 'Escape') { pause(); return; }
+    if (e.target && e.target.tagName === 'INPUT' && e.code !== 'Escape') return; // ticking a box in the spawn menu
+    if (e.code === 'Space' || e.code === 'Tab') e.preventDefault();
+    if (e.code === 'Escape') {
+      if (state === 'spawnmenu') { show('spawn-menu', false); state = 'playing'; }
+      pause();
+      return;
+    }
     if (state !== 'playing') return;
     if (!keys[e.code]) {
       if (e.code === 'Space') input.jump = true;
       if (e.code === 'KeyR') startReload();
       if (e.code === 'Digit1') selectWeapon(0);
       if (e.code === 'Digit2') selectWeapon(1);
-      if (e.code === 'KeyQ') selectWeapon(1 - weapon);
+      if (e.code === 'Digit3') selectWeapon(2);
+      if (e.code === 'KeyQ') selectWeapon((weapon + 1) % availableWeapons());
+      if (e.code === 'KeyE' || e.code === 'Tab') openSpawnMenu();
     }
     keys[e.code] = true;
   });
@@ -1302,7 +1423,8 @@
   tFire.addEventListener('touchend', (e) => { e.preventDefault(); input.firing = false; }, { passive: false });
   const tap = (id, fn) => $(id).addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); if (state === 'playing') fn(); }, { passive: false });
   tap('t-reload', startReload);
-  tap('t-swap', () => selectWeapon(1 - weapon));
+  tap('t-swap', () => selectWeapon((weapon + 1) % availableWeapons()));
+  tap('t-menu', () => openSpawnMenu());
   tap('t-jump', () => { input.jump = true; });
 
   // ---------- Boards you can read inside VR ----------
@@ -1333,8 +1455,11 @@
   let boardMsg = '', boardMsgUntil = 0;
   function drawWallBoard() {
     const msg = clock < boardMsgUntil ? boardMsg : '';
-    const top = state === 'menu' ? 'BONEBREAK' : 'WAVE ' + wave + '   ·   ' + (toSpawn + aliveCount()) + ' LEFT';
-    const bottom = msg || (state === 'dead' ? 'YOU DIED' : state === 'menu' ? 'Deploy to start' : 'SCORE ' + score);
+    const top = state === 'menu' ? 'BONEBREAK'
+      : mode === 'sandbox' ? 'SANDBOX   ·   ' + aliveCount() + ' ALIVE'
+      : 'WAVE ' + wave + '   ·   ' + (toSpawn + aliveCount()) + ' LEFT';
+    const bottom = msg || (state === 'dead' ? 'YOU DIED' : state === 'menu' ? 'Deploy to start'
+      : mode === 'sandbox' ? 'SPAWN GUN: ' + SPAWNABLES[spawnIndex].name.toUpperCase() : 'SCORE ' + score);
     paintBoard(wallBoard, top + '|' + bottom + '|' + !!msg, (g, w, h) => {
       g.fillStyle = 'rgba(18,16,20,0.92)'; g.fillRect(0, 0, w, h);
       g.fillStyle = '#c4161c'; g.fillRect(0, 0, w, 10);
@@ -1349,14 +1474,14 @@
     if (!vrActive) return;
     const w = WEAPONS[weapon];
     const hp = Math.max(0, Math.round(player.health));
-    const ammoText = reloadLeft > 0 ? 'RELOADING' : ammo[weapon] + ' / ' + w.mag;
+    const ammoText = w.spawner ? SPAWNABLES[spawnIndex].name.toUpperCase() : reloadLeft > 0 ? 'RELOADING' : ammo[weapon] + ' / ' + w.mag;
     paintBoard(wrist, [hp, ammoText, score, weapon].join('|'), (g, W) => {
       g.fillStyle = 'rgba(18,16,20,0.92)'; g.fillRect(0, 0, W, 256);
       g.fillStyle = '#c4161c'; g.fillRect(0, 0, W, 8);
       g.fillStyle = '#a39b91'; g.font = '700 28px Barlow, sans-serif';
       g.fillText('HEALTH', 22, 48); g.fillText(w.name.toUpperCase(), 280, 48);
       g.fillStyle = hp <= 30 ? '#c4161c' : '#f1ece4'; g.font = '64px ' + STENCIL; g.fillText(String(hp), 22, 116);
-      g.fillStyle = reloadLeft > 0 ? '#ffb627' : '#f1ece4'; g.font = (reloadLeft > 0 ? '38px ' : '60px ') + STENCIL; g.fillText(ammoText, 280, 116);
+      g.fillStyle = reloadLeft > 0 ? '#ffb627' : '#f1ece4'; g.font = (reloadLeft > 0 || w.spawner ? '38px ' : '60px ') + STENCIL; g.fillText(ammoText, 280, 116, 220);
       g.fillStyle = 'rgba(255,255,255,0.15)'; g.fillRect(22, 140, 468, 18);
       g.fillStyle = hp <= 30 ? '#c4161c' : '#f1ece4'; g.fillRect(22, 140, 468 * hp / 100, 18);
       g.fillStyle = '#a39b91'; g.font = '700 28px Barlow, sans-serif'; g.fillText('SCORE', 22, 214);
@@ -1431,7 +1556,11 @@
       else if (state === 'dead') startGame();
     });
     c.addEventListener('selectend', () => { input.firing = false; });
-    c.addEventListener('squeezestart', () => { if (state === 'playing') startReload(); });
+    c.addEventListener('squeezestart', () => {
+      if (state !== 'playing') return;
+      if (WEAPONS[weapon].spawner) cycleSpawn(); // in VR, grip picks the next thing to spawn
+      else startReload();
+    });
   }
 
   function attachGun(c) {
@@ -1488,7 +1617,7 @@
         else if (Math.abs(sx) < 0.3) vrPrev.turn = 0;
         const a = pressed(4), b = pressed(5);
         if (a && !vrPrev.a) input.jump = true;
-        if (b && !vrPrev.b) selectWeapon(1 - weapon);
+        if (b && !vrPrev.b) selectWeapon((weapon + 1) % availableWeapons());
         vrPrev.a = a;
         vrPrev.b = b;
       }
@@ -1532,6 +1661,405 @@
     navigator.xr.isSessionSupported('immersive-vr').then((ok) => { $('enter-vr').hidden = !ok; }).catch(() => {});
   }
 
+  // ---------- Sandbox mode: the spawn gun ----------
+  let mode = 'waves', godMode = true, aiShoots = true, spawnIndex = 0;
+  const SPAWNABLES = [
+    { id: 'soldier', name: 'Soldier', desc: 'Armed. Fights back.', kind: 'human', color: '#6b7a3a' },
+    { id: 'heavy', name: 'Heavy', desc: 'Big and tough. 250 HP.', kind: 'human', scale: 1.25, color: '#7a3a3a' },
+    { id: 'dummy', name: 'Dummy', desc: 'Stands still and takes it.', kind: 'human', color: '#e8c547' },
+    { id: 'crate', name: 'Crate', desc: 'Cover you can stack.', kind: 'crate', color: '#9a7446' },
+    { id: 'barrel', name: 'Explosive barrel', desc: 'Shoot it. Boom.', kind: 'barrel', color: '#d1262c' },
+  ];
+  function availableWeapons() { return mode === 'sandbox' ? 3 : 2; }
+  const faceYaw = (from, to) => Math.atan2(-(to.x - from.x), -(to.z - from.z));
+  const DOWN = new V3(0, -1, 0);
+
+  // The glowing preview ("base model") that shows what will spawn and where.
+  const ghostMat = new THREE.MeshBasicMaterial({ color: 0x5ef2ff, transparent: true, opacity: 0.28, depthWrite: false });
+  const ghostEdgeMat = new THREE.LineBasicMaterial({ color: 0x9ff8ff, transparent: true, opacity: 0.9 });
+  function ghostPart(group, geo, x, y, z) {
+    const m = new THREE.Mesh(geo, ghostMat);
+    m.position.set(x, y, z);
+    group.add(m);
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), ghostEdgeMat);
+    edges.position.set(x, y, z);
+    group.add(edges);
+  }
+  const ghosts = SPAWNABLES.map((item) => {
+    const g = new THREE.Group();
+    if (item.kind === 'human') {
+      const B = (sx, sy, sz) => new THREE.BoxGeometry(sx, sy, sz);
+      ghostPart(g, B(0.5, 0.8, 0.28), 0, 1.18, 0);
+      ghostPart(g, B(0.3, 0.32, 0.3), 0, 1.76, 0);
+      for (const s of [-1, 1]) {
+        ghostPart(g, B(0.13, 0.66, 0.13), s * 0.33, 1.22, 0);
+        ghostPart(g, B(0.17, 0.86, 0.17), s * 0.13, 0.43, 0);
+      }
+      g.scale.setScalar(item.scale || 1);
+    } else if (item.kind === 'crate') {
+      ghostPart(g, new THREE.BoxGeometry(1.4, 1.4, 1.4), 0, 0.7, 0);
+    } else {
+      ghostPart(g, new THREE.CylinderGeometry(0.4, 0.4, 1.1, 16), 0, 0.55, 0);
+    }
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.55, 32), ghostMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.02;
+    g.add(ring);
+    g.visible = false;
+    scene.add(g);
+    return g;
+  });
+  const beamGeo = new THREE.BufferGeometry();
+  beamGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+  const beam = new THREE.Line(beamGeo, ghostEdgeMat);
+  beam.frustumCulled = false;
+  beam.visible = false;
+  scene.add(beam);
+
+  let spawnerArmed = false, lastSpot = null;
+  function aimFromHand() {
+    if (vrActive && gunController) {
+      gunController.getWorldPosition(camPos);
+      gunController.getWorldQuaternion(aimQuat);
+      camDir.set(0, 0, -1).applyQuaternion(aimQuat);
+    } else {
+      camera.getWorldPosition(camPos);
+      camera.getWorldDirection(camDir);
+    }
+  }
+
+  // Where the spawn gun is pointing, dropped onto the floor (or the top of a crate) and checked for room.
+  function findSpawnSpot() {
+    aimFromHand();
+    const item = SPAWNABLES[spawnIndex];
+    ray.set(camPos, camDir);
+    ray.far = 40;
+    const hit = ray.intersectObjects(solidMeshes, false)[0];
+    let pos, ok = true;
+    if (hit) {
+      const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+      pos = hit.point.clone();
+      if (n.y < 0.5) pos.addScaledVector(n, item.kind === 'crate' ? 0.75 : 0.45); // pointing at a wall: step back from it
+    } else {
+      pos = camPos.clone().addScaledVector(camDir, 12);
+      ok = false;
+    }
+    const lim = HALF - 0.8;
+    pos.x = Math.max(-lim, Math.min(lim, pos.x));
+    pos.z = Math.max(-lim, Math.min(lim, pos.z));
+    if (item.kind === 'human') {
+      pos.y = 0; // people stand on the floor
+      for (const b of statics) {
+        if (b.max.y <= 0.05) continue;
+        if (pos.x > b.min.x - 0.3 && pos.x < b.max.x + 0.3 && pos.z > b.min.z - 0.3 && pos.z < b.max.z + 0.3 && b.min.y < 1.5) { ok = false; break; }
+      }
+      if (enemies.length >= 40) ok = false;
+    } else {
+      ray.set(new V3(pos.x, pos.y + 0.3, pos.z), DOWN);
+      ray.far = 30;
+      const below = ray.intersectObjects(solidMeshes, false)[0];
+      pos.y = below ? below.point.y : 0;
+      const half = item.kind === 'crate' ? 0.7 : 0.4, height = item.kind === 'crate' ? 1.4 : 1.1;
+      const overPlayer = Math.abs(pos.x - player.pos.x) < half + player.r && Math.abs(pos.z - player.pos.z) < half + player.r;
+      if (overPlayer && pos.y < player.pos.y + player.h && pos.y + height > player.pos.y) ok = false;
+      if (pos.y + height > 6.8) ok = false;
+    }
+    return { ok, pos, yaw: item.kind === 'human' ? faceYaw(pos, player.pos) : 0 };
+  }
+
+  const muzzleWorld = new V3();
+  function showGhost(spot) {
+    ghosts.forEach((g, i) => { g.visible = i === spawnIndex; });
+    const g = ghosts[spawnIndex];
+    g.position.copy(spot.pos);
+    g.rotation.y = spot.yaw;
+    ghostMat.color.set(spot.ok ? 0x5ef2ff : 0xff4a4a);
+    ghostEdgeMat.color.set(spot.ok ? 0x9ff8ff : 0xff8a8a);
+    muzzle.getWorldPosition(muzzleWorld);
+    const a = beamGeo.attributes.position;
+    a.setXYZ(0, muzzleWorld.x, muzzleWorld.y, muzzleWorld.z);
+    a.setXYZ(1, spot.pos.x, spot.pos.y + 0.4, spot.pos.z);
+    a.needsUpdate = true;
+    beam.visible = true;
+  }
+  function cancelSpawnPreview() {
+    spawnerArmed = false;
+    for (const g of ghosts) g.visible = false;
+    beam.visible = false;
+  }
+
+  // Hold fire to aim the preview, let go to spawn.
+  function updateSpawner() {
+    if (input.firing) {
+      lastSpot = findSpawnSpot();
+      showGhost(lastSpot);
+      spawnerArmed = true;
+      return;
+    }
+    if (spawnerArmed) {
+      const spot = lastSpot;
+      cancelSpawnPreview();
+      if (spot && spot.ok) spawnAt(spot);
+      else sfx.click();
+      return;
+    }
+    if (input.firePressed) { // a quick click (drag-to-look mode) spawns straight away
+      const spot = findSpawnSpot();
+      if (spot.ok) spawnAt(spot);
+    }
+  }
+
+  function spawnAt(spot) {
+    const item = SPAWNABLES[spawnIndex];
+    if (item.kind === 'human') {
+      const e = makeEnemy(spot.pos.x, spot.pos.z, item.id);
+      e.yaw = spot.yaw;
+      e.root.rotation.y = spot.yaw;
+    } else if (item.kind === 'crate') {
+      spawnCrate(spot.pos);
+    } else {
+      spawnBarrel(spot.pos);
+    }
+    sfx.spawn();
+    spawnFlash(spot.pos);
+    if (gunController) pulse(gunController, 0.4, 40);
+  }
+
+  function cycleSpawn() {
+    spawnIndex = (spawnIndex + 1) % SPAWNABLES.length;
+    cancelSpawnPreview();
+    updateAmmoHud();
+    feed('SPAWN: ' + SPAWNABLES[spawnIndex].name.toUpperCase(), false);
+  }
+
+  function chirp(from, to, dur, gain) {
+    if (!audio) return;
+    const t = audio.currentTime;
+    const o = audio.createOscillator();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(from, t);
+    o.frequency.exponentialRampToValueAtTime(to, t + dur);
+    const g = audio.createGain();
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(audio.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  sfx.spawn = () => { chirp(380, 980, 0.18, 0.2); noise(0.12, 5000, 0.08, 'highpass'); };
+  sfx.despawn = () => chirp(900, 260, 0.16, 0.18);
+  sfx.boom = () => { noise(1.4, 420, 1.0); thump(55, 0.9, 1.0); noise(0.35, 2800, 0.45, 'highpass'); };
+
+  // ---------- Props: crates and explosive barrels ----------
+  const props = [];
+  const barrelTex = canvasTexture(128, (g, s) => {
+    g.fillStyle = '#b3141a'; g.fillRect(0, 0, s, s);
+    g.fillStyle = '#5a0a0d'; g.fillRect(0, 0, s, 10); g.fillRect(0, s - 10, s, 10);
+    g.fillStyle = '#ffb627'; g.fillRect(0, s * 0.4, s, s * 0.2);
+    g.fillStyle = '#1a1416'; g.font = 'bold 30px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('! TNT !', s / 2, s / 2 + 1);
+  });
+  const barrelMat = mat(0xffffff, { map: barrelTex, roughness: 0.6 });
+  function spawnCrate(pos) {
+    const s = 1.4;
+    const mesh = solidBox(pos.x, pos.y + s / 2, pos.z, s, s, s, crateMat);
+    const prop = { kind: 'crate', mesh, box: statics[statics.length - 1] };
+    mesh.userData = { prop };
+    props.push(prop);
+  }
+  function spawnBarrel(pos) {
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 1.1, 16), barrelMat);
+    mesh.position.set(pos.x, pos.y + 0.55, pos.z);
+    mesh.castShadow = mesh.receiveShadow = true;
+    scene.add(mesh);
+    const box = { min: new V3(pos.x - 0.4, pos.y, pos.z - 0.4), max: new V3(pos.x + 0.4, pos.y + 1.1, pos.z + 0.4) };
+    statics.push(box);
+    solidMeshes.push(mesh);
+    const prop = { kind: 'barrel', mesh, box };
+    mesh.userData = { prop };
+    props.push(prop);
+  }
+  function removeProp(p) {
+    scene.remove(p.mesh);
+    p.mesh.geometry.dispose();
+    const si = statics.indexOf(p.box); if (si >= 0) statics.splice(si, 1);
+    const mi = solidMeshes.indexOf(p.mesh); if (mi >= 0) solidMeshes.splice(mi, 1);
+    const pi = props.indexOf(p); if (pi >= 0) props.splice(pi, 1);
+  }
+  function clearProps() { for (const p of props.slice()) removeProp(p); }
+
+  // ---------- Explosions ----------
+  const effects = [];
+  function updateEffects(dt) {
+    for (let i = effects.length - 1; i >= 0; i--) {
+      const fx = effects[i];
+      fx.t += dt;
+      const k = Math.min(1, fx.t / fx.life);
+      fx.update(k);
+      if (k >= 1) { fx.done(); effects.splice(i, 1); }
+    }
+  }
+  function spawnFlash(pos) {
+    const m = new THREE.MeshBasicMaterial({ color: 0x5ef2ff, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.4, 0.55, 32), m);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(pos.x, pos.y + 0.03, pos.z);
+    scene.add(ring);
+    effects.push({ t: 0, life: 0.4, update: (k) => { ring.scale.setScalar(1 + k * 3); m.opacity = 1 - k; },
+      done: () => { scene.remove(ring); ring.geometry.dispose(); m.dispose(); } });
+  }
+  const scorchMat = new THREE.MeshLambertMaterial({ color: 0x0b0a0a, map: bloodTextures[0], transparent: true, alphaTest: 0.1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 });
+
+  function explodeBarrel(p) {
+    if (p.exploded) return;
+    p.exploded = true;
+    const c = p.mesh.position.clone();
+    removeProp(p);
+    explosion(c);
+  }
+
+  function explosion(c) {
+    const R = 5.5;
+    sfx.boom();
+    recoil = Math.min(6, recoil + 3);
+    if (vrActive) for (const ctl of controllers) pulse(ctl, 1, 250);
+    // fireball and light
+    const fm = new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, depthWrite: false });
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), fm);
+    ball.position.copy(c);
+    scene.add(ball);
+    const light = new THREE.PointLight(0xff8a3d, 8, 20);
+    light.position.copy(c);
+    scene.add(light);
+    effects.push({ t: 0, life: 0.55, update: (k) => {
+      ball.scale.setScalar(0.5 + k * 3.5); fm.opacity = 1 - k; fm.color.setRGB(1, 0.63 - k * 0.5, 0.25 - k * 0.2); light.intensity = 8 * (1 - k);
+    }, done: () => { scene.remove(ball); scene.remove(light); ball.geometry.dispose(); fm.dispose(); } });
+    for (let i = 0; i < 36; i++) {
+      emit(c.clone(), new V3(Math.random() - 0.5, Math.random() * 0.9, Math.random() - 0.5).normalize().multiplyScalar(6 + Math.random() * 8), false, 0.7);
+    }
+    addDecal(scorchMat, new V3(c.x, 0, c.z), UP, 3.5);
+    // everyone nearby gets thrown, broken and bloodied
+    for (const e of enemies.slice()) {
+      const ep = e.root.position.clone().setY(1);
+      const d = ep.distanceTo(c);
+      if (d > R) continue;
+      const dir = ep.sub(c).setY(0);
+      if (dir.lengthSq() < 0.001) dir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+      dir.normalize().add(new V3(0, 0.4, 0)).normalize();
+      blastEnemy(e, dir, 180 * (1 - d / R) + 20);
+    }
+    const pd = player.pos.clone().setY(player.pos.y + 1).distanceTo(c);
+    if (pd < R) hurtPlayer(Math.round(70 * (1 - pd / R)));
+    // set off other barrels nearby
+    for (const other of props.slice()) {
+      if (other.kind === 'barrel' && other.mesh.position.distanceTo(c) < R * 0.8) {
+        setTimeout(() => { if (props.includes(other)) explodeBarrel(other); }, 150 + Math.random() * 200);
+      }
+    }
+  }
+
+  function blastEnemy(e, dir, power) {
+    const at = e.root.position.clone().setY(1.2);
+    bloodSpray(at, dir, 22, 7);
+    splatterBehind(at, dir);
+    if (e.dead) return;
+    const limbs = ['armL', 'armR', 'legL', 'legR'].filter(n => !e.broken[n]);
+    const breaks = Math.min(limbs.length, power > 100 ? 2 : 1);
+    for (let i = 0; i < breaks; i++) breakLimb(e, limbs.splice(Math.floor(Math.random() * limbs.length), 1)[0], dir);
+    e.hp -= power;
+    e.lastHitDir = dir.clone();
+    if (e.hp <= 0) killEnemy(e, false, dir, false, power > 150 ? 'gib' : true);
+    else knockDown(e, dir);
+    if (Math.random() < 0.5) painSound(e);
+  }
+
+  // ---------- Removing things (R with the spawn gun) ----------
+  function removeAimed() {
+    aimFromHand();
+    ray.set(camPos, camDir);
+    ray.far = 40;
+    const hit = ray.intersectObjects(shootables(), false)[0];
+    if (!hit) return;
+    const data = hit.object.userData;
+    if (data.enemy) removeEnemy(data.enemy);
+    else if (data.prop) removeProp(data.prop);
+    else return;
+    sfx.despawn();
+    feed('REMOVED', false);
+  }
+
+  function clearSandbox() {
+    while (enemies.length) removeEnemy(enemies[0]);
+    corpses.length = 0;
+    for (const d of debris) scene.remove(d.obj);
+    debris.length = 0;
+    for (const m of decals) if (m.parent) m.parent.remove(m);
+    decals.length = 0;
+    clearProps();
+  }
+
+  function startSandbox() {
+    $('wave').textContent = 'SANDBOX';
+    $('left').textContent = '0';
+    for (const x of [-2, 2]) {
+      const e = makeEnemy(x, -9, 'dummy');
+      e.yaw = faceYaw(e.root.position, player.pos);
+      e.root.rotation.y = e.yaw;
+    }
+    banner('SANDBOX', vrActive ? 'Grip picks what to spawn' : isTouch ? 'Tap Spawn to pick what to spawn' : 'Press E to open the spawn menu');
+  }
+
+  // ---------- Spawn menu ----------
+  const ICONS = {
+    human: '<svg viewBox="0 0 40 48" aria-hidden="true" fill="COLOR"><rect x="14" y="1" width="12" height="12" rx="2"/><rect x="11" y="14" width="18" height="17" rx="2"/><rect x="4" y="14" width="6" height="17" rx="2"/><rect x="30" y="14" width="6" height="17" rx="2"/><rect x="12" y="32" width="7" height="15" rx="2"/><rect x="21" y="32" width="7" height="15" rx="2"/></svg>',
+    crate: '<svg viewBox="0 0 40 48" aria-hidden="true"><rect x="4" y="8" width="32" height="32" fill="COLOR"/><path d="M4 8 L36 40 M4 40 L36 8" stroke="#4b3520" stroke-width="3"/><rect x="4" y="8" width="32" height="32" fill="none" stroke="#4b3520" stroke-width="3"/></svg>',
+    barrel: '<svg viewBox="0 0 40 48" aria-hidden="true"><rect x="8" y="4" width="24" height="40" rx="5" fill="COLOR"/><rect x="8" y="19" width="24" height="9" fill="#ffb627"/><rect x="8" y="8" width="24" height="3" fill="#5a0a0d"/><rect x="8" y="37" width="24" height="3" fill="#5a0a0d"/></svg>',
+  };
+  const grid = $('spawn-grid');
+  SPAWNABLES.forEach((item, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'spawn-card';
+    b.dataset.i = i;
+    b.innerHTML = ICONS[item.kind].replace('COLOR', item.color) + '<b></b><span></span>';
+    b.querySelector('b').textContent = item.name;
+    b.querySelector('span').textContent = item.desc;
+    b.addEventListener('click', () => {
+      spawnIndex = i;
+      selectWeaponForce(2);
+      closeSpawnMenu();
+    });
+    grid.appendChild(b);
+  });
+
+  function openSpawnMenu() {
+    if (mode !== 'sandbox' || state !== 'playing' || vrActive) return;
+    state = 'spawnmenu';
+    clearInputs();
+    cancelSpawnPreview();
+    for (const b of grid.children) b.classList.toggle('on', Number(b.dataset.i) === spawnIndex);
+    show('spawn-menu', true);
+    show('touch', false);
+    if (document.pointerLockElement) document.exitPointerLock();
+  }
+  function closeSpawnMenu() {
+    if (state !== 'spawnmenu') return;
+    resume(); // from a click, so the mouse can be captured again
+  }
+  $('close-spawn').addEventListener('click', closeSpawnMenu);
+  $('clear-all').addEventListener('click', () => { clearSandbox(); feed('CLEARED', false); });
+  $('opt-god').addEventListener('change', (e) => { godMode = e.target.checked; });
+  $('opt-shoot').addEventListener('change', (e) => { aiShoots = e.target.checked; });
+
+  for (const b of document.querySelectorAll('.mode')) {
+    b.addEventListener('click', () => {
+      mode = b.dataset.mode;
+      for (const o of document.querySelectorAll('.mode')) {
+        o.classList.toggle('on', o === b);
+        o.setAttribute('aria-checked', String(o === b));
+      }
+    });
+  }
+
   // ---------- Main loop ----------
   let last = performance.now();
   function frame(now) {
@@ -1548,7 +2076,9 @@
       // Shooting and reloading
       const w = WEAPONS[weapon];
       const t = now / 1000;
-      if (reloadLeft > 0) {
+      if (w.spawner) {
+        updateSpawner();
+      } else if (reloadLeft > 0) {
         reloadLeft -= dt;
         gunRoot.rotation.x = -0.6 * Math.sin(Math.min(1, 1 - reloadLeft / w.reload) * Math.PI);
         if (reloadLeft <= 0) { reloadLeft = 0; ammo[weapon] = w.mag; gunRoot.rotation.x = 0; sfx.click(); updateAmmoHud(); }
@@ -1561,12 +2091,15 @@
       if (clock - player.lastHurt > 4 && player.health < 100) { player.health = Math.min(100, player.health + 12 * dt); updateHealthHud(); }
     } else {
       input.x = input.z = 0;
+      if (spawnerArmed) cancelSpawnPreview();
     }
     if (state !== 'paused') {
       clock += dt;
       updatePlayer(dt);
       updateEnemies(dt);
       updateWaves(dt);
+      updateEffects(dt);
+      if (mode === 'sandbox' && state !== 'menu') $('left').textContent = aliveCount();
       updateParticles(dt);
       updateDebris(dt);
     }

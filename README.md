@@ -22,6 +22,12 @@ In VR it's at `https://lukeponder02-debug.github.io/c-/web/bonebreak/` — press
 VR controls: left stick moves (click to sprint), right stick turns, trigger shoots, grip reloads,
 **A** jumps, **B** swaps rifle/shotgun. Health, ammo and score are on a watch on your left wrist.
 
+**Sandbox mode:** pick *Sandbox* on the main menu to get a spawn gun (key **3**). Press **E** for
+the spawn menu (soldier, heavy, dummy, crate, explosive barrel), hold fire to see a glowing preview
+where it will appear, and let go to spawn it. **R** removes whatever you're aiming at. The menu also
+has God mode, a switch for whether soldiers shoot back, and *Clear everything*. In VR, grip picks
+the next thing to spawn.
+
 After changing a game, run `python3 web/build_standalone.py` to update the standalone pages.
 
 A Rec Room-style starter game made in **Unity** with **C#**. You get a room with a paintball gun,
