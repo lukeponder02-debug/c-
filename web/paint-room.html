@@ -948,6 +948,7 @@
     $('score').textContent = '0';
     player.pos.set(0, 0, -10); player.vy = 0; yaw = Math.PI; pitch = 0;
     for (const t of targets) { t.up = true; t.group.visible = true; }
+    for (const r of remotes.values()) if (r.bot) r.score = 0;
     resume();
   }
 
@@ -1127,6 +1128,7 @@
       updateToys(dt);
       updateBalls(dt);
       updateTargets(dt, clock);
+      updateBots(dt);
       updateRemotes(dt, clock);
       sharePresence(false);
     }
@@ -1337,7 +1339,8 @@
     if (!room) return;
     room.onPeers(({ peers }) => syncPeers(peers), () => {
       room = null;
-      for (const peer of [...remotes.keys()]) removeRemote(peer);
+      for (const [peer, r] of [...remotes]) if (!r.bot) removeRemote(peer);
+      ensureBots();
       updatePlayerList();
     });
     sharePresence(true);
@@ -1399,7 +1402,8 @@
       const avKey = JSON.stringify(av);
       if (avKey !== r.avKey) { r.avKey = avKey; r.av = av; buildRemoteModel(r); }
     }
-    for (const peer of [...remotes.keys()]) if (!here.has(peer)) removeRemote(peer);
+    for (const [peer, r] of [...remotes]) if (!r.bot && !here.has(peer)) removeRemote(peer);
+    ensureBots();
     updatePlayerList();
   }
 
@@ -1436,7 +1440,7 @@
   }
 
   function remoteHitboxes() {
-    return [...remotes.values()].map(r => r.hitbox);
+    return [...remotes.values()].filter(r => !(r.down > 0)).map(r => r.hitbox);
   }
 
   function setNameTag(r) {
@@ -1453,7 +1457,7 @@
     g.font = '32px "Lilita One", "Trebuchet MS", sans-serif';
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.fillText(r.name, 128, 34, 228);
+    g.fillText(r.bot ? r.name + ' (bot)' : r.name, 128, 34, 228);
     if (r.tag.material.map) r.tag.material.map.dispose();
     r.tag.material.map = new THREE.CanvasTexture(c);
     r.tag.material.needsUpdate = true;
@@ -1542,6 +1546,7 @@
 
   function gotSplatted(owner, color) {
     const r = remotes.get(owner);
+    if (r && r.bot && state === 'playing') r.score += 2;
     const flash = $('hit-flash');
     flash.style.setProperty('--flash', PAINT[color]);
     flash.classList.add('show');
@@ -1551,6 +1556,7 @@
 
   function tagPlayer(r, point, color) {
     burst(point, color);
+    if (r.bot) { r.down = 2; r.root.visible = false; } // bots pop, then come back somewhere else
     if (state === 'playing') {
       score += 2;
       $('score').textContent = score;
@@ -1560,16 +1566,15 @@
 
   function updatePlayerList() {
     const others = [...remotes.values()];
-    $('online').textContent = !room
-      ? 'Playing solo. Share this page so friends can join you.'
-      : others.length === 0
-        ? 'You\'re the only one here. Share this page so friends can join!'
-        : others.length === 1 ? '1 other player is here!' : others.length + ' other players are here!';
+    const people = others.filter(r => !r.bot).length;
+    $('online').textContent = people === 0
+      ? 'No one else is here yet, so Sam and Juniper (bots) will play with you. Share this page so friends can join!'
+      : people === 1 ? '1 other player is here!' : people + ' other players are here!';
     $('players').hidden = others.length === 0;
     const list = $('player-list');
     list.textContent = '';
     const rows = [{ name: avatar.name || 'Player', score, shirt: avatar.shirt, me: true }]
-      .concat(others.map(r => ({ name: r.name, score: r.score, shirt: r.av ? r.av.shirt : '#ffffff', me: false })))
+      .concat(others.map(r => ({ name: r.name, score: r.score, shirt: r.av ? r.av.shirt : '#ffffff', me: false, bot: r.bot })))
       .sort((a, b) => b.score - a.score);
     for (const row of rows) {
       const li = document.createElement('li');
@@ -1579,10 +1584,10 @@
       const who = document.createElement('span');
       who.className = 'who';
       who.textContent = row.name;
-      if (row.me) {
+      if (row.me || row.bot) {
         const you = document.createElement('span');
         you.className = 'you';
-        you.textContent = ' (you)';
+        you.textContent = row.me ? ' (you)' : ' (bot)';
         who.appendChild(you);
       }
       const pts = document.createElement('span');
@@ -1593,6 +1598,108 @@
     }
   }
   setInterval(() => { if (remotes.size) updatePlayerList(); }, 500);
+
+  // ---------- Bots ----------
+  // When no real players are around, two bots wander the room and shoot at you during a round.
+  // They live only on your screen and leave as soon as a real person joins.
+  const BOTS = [
+    { name: 'Sam', color: 2, av: { skin: '#d9a06f', shirt: '#3ddc84', hair: 'spiky', hairColor: '#1d1b3a', hat: 'none', glasses: 'shades', mouth: 'grin' } },
+    { name: 'Juniper', color: 4, av: { skin: '#7d4a2a', shirt: '#b07cff', hair: 'long', hairColor: '#ff6fae', hat: 'beanie', glasses: 'none', mouth: 'smile' } },
+  ];
+  // Open spots on the floor the bots walk between.
+  const BOT_SPOTS = [[-6, -8], [6, -10], [10, -2], [8, 6], [2, 6], [-6, 4], [-9, -3], [0, -3], [12, 11], [-3, 12], [12, -12], [-12, -12]];
+  const randomSpot = () => {
+    const s = BOT_SPOTS[Math.floor(Math.random() * BOT_SPOTS.length)];
+    return new V3(s[0], 0, s[1]);
+  };
+
+  function ensureBots() {
+    const wantBots = ![...remotes.values()].some(r => !r.bot);
+    BOTS.forEach((spec, i) => {
+      const id = 'bot-' + i;
+      if (wantBots && !remotes.has(id)) {
+        const r = addRemote(id);
+        r.bot = true;
+        r.name = spec.name;
+        r.color = spec.color;
+        r.av = Object.assign({}, spec.av);
+        setNameTag(r);
+        buildRemoteModel(r);
+        placeBot(r);
+      } else if (!wantBots && remotes.has(id)) {
+        removeRemote(id);
+      }
+    });
+  }
+
+  function placeBot(r) {
+    r.target.copy(randomSpot());
+    r.placed = false;
+    r.goal = null;
+    r.stuck = 0;
+    r.down = 0;
+    r.nextShot = 1.5 + Math.random() * 2;
+    r.root.visible = true;
+  }
+
+  function moveBot(r, dx, dz) {
+    const rad = 0.35;
+    for (const [axis, d] of [['x', dx], ['z', dz]]) {
+      r.target[axis] += d;
+      for (const b of statics) {
+        if (b.max.y <= 0.05) continue; // the floor
+        if (r.target.x - rad < b.max.x && r.target.x + rad > b.min.x && r.target.z - rad < b.max.z && r.target.z + rad > b.min.z) {
+          const mid = (b.min[axis] + b.max[axis]) / 2;
+          r.target[axis] = r.target[axis] < mid ? b.min[axis] - rad - 0.001 : b.max[axis] + rad + 0.001;
+        }
+      }
+    }
+  }
+
+  function botShoot(r) {
+    const from = new V3(r.target.x, 1.35, r.target.z);
+    const aim = new V3(player.pos.x, player.pos.y + 1.1, player.pos.z);
+    const dist = from.distanceTo(aim);
+    const dir = aim.sub(from).normalize();
+    ray.set(from, dir);
+    ray.far = dist;
+    if (ray.intersectObjects(solidMeshes, false).length) return; // can't see you
+    // Bots aren't perfect shots.
+    dir.x += (Math.random() - 0.5) * 0.12;
+    dir.y += (Math.random() - 0.5) * 0.08;
+    dir.z += (Math.random() - 0.5) * 0.12;
+    dir.normalize();
+    spawnBall(from.clone().addScaledVector(dir, 0.6), dir, r.color, r.peer);
+  }
+
+  function updateBots(dt) {
+    for (const r of remotes.values()) {
+      if (!r.bot) continue;
+      if (r.down > 0) {
+        r.down -= dt;
+        if (r.down <= 0) placeBot(r);
+        continue;
+      }
+      if (!r.goal || r.target.distanceTo(r.goal) < 0.4 || r.stuck > 1.2) { r.goal = randomSpot(); r.stuck = 0; }
+      const dir = r.goal.clone().sub(r.target);
+      dir.y = 0;
+      if (dir.lengthSq() > 0.0001) dir.normalize();
+      const speed = 2.6;
+      const before = r.target.clone();
+      moveBot(r, dir.x * speed * dt, dir.z * speed * dt);
+      if (r.target.distanceTo(before) < speed * dt * 0.3) r.stuck += dt;
+
+      const toMe = new V3(player.pos.x - r.target.x, 0, player.pos.z - r.target.z);
+      const watching = state === 'playing' && toMe.length() < 20;
+      const look = watching ? toMe : dir;
+      if (look.lengthSq() > 0.0001) r.yaw = Math.atan2(-look.x, -look.z);
+
+      if (state === 'playing') {
+        r.nextShot -= dt;
+        if (r.nextShot <= 0) { r.nextShot = 1.4 + Math.random() * 1.8; botShoot(r); }
+      }
+    }
+  }
 
   // ---------- Loading screen ----------
   const TIPS = [
@@ -1670,6 +1777,8 @@
   buildAvatarEditor();
   renderAvatars();
   runLoading();
+  ensureBots();
+  updatePlayerList();
   connectRoom();
 })();
 </script>
