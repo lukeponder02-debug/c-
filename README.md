@@ -1,8 +1,20 @@
 # c-
 Coding rec room
 
-**No Unity? Play the browser version:** open `web/paint-room.html` in any web browser
-(Chrome, Safari, Edge…). It works on computers and on phones and tablets with touch controls.
+**No Unity? Play the browser version:** open `web/index.html` in any web browser
+(Chrome, Safari, Edge…). It works on computers, on phones and tablets with touch controls,
+and in VR headsets like the Meta Quest.
+
+### Playing in VR (Meta Quest)
+
+1. Turn on GitHub Pages for this repo: **Settings → Pages → Build and deployment → Source:
+   Deploy from a branch**, pick the branch with the game and the **/ (root)** folder, and save.
+2. After a minute the game is online at `https://lukeponder02-debug.github.io/c-/web/`.
+3. Open that link in the headset's **Browser** app and press **Play in VR**.
+
+VR controls: left stick walks, right stick turns, trigger shoots, grip grabs, **A** jumps,
+**B** changes paint color. Score and time show on the board above the targets.
+After changing `web/paint-room.html`, run `python3 web/build_standalone.py` to update `web/index.html`.
 
 A Rec Room-style starter game made in **Unity** with **C#**. You get a room with a paintball gun,
 targets to shoot, and toys you can pick up and throw.

@@ -252,6 +252,8 @@
     background: radial-gradient(circle, transparent 35%, var(--flash, var(--red)) 100%);
   }
   #hit-flash.show { opacity: 0.85; transition: none; }
+  .btn.vr { background: var(--blue); color: #fff; }
+  .vr-note { font-size: 0.9rem; }
   .online {
     font-weight: 700; color: var(--ink) !important;
     background: #eef6ff; border: 2px dashed var(--blue); border-radius: 12px; padding: 6px 10px;
@@ -380,6 +382,8 @@
       <button class="btn small" id="edit-avatar" type="button">Edit my avatar</button>
     </div>
     <button class="btn" id="play" type="button">Play</button>
+    <button class="btn vr" id="enter-vr" type="button" hidden>Play in VR</button>
+    <p class="vr-note" id="vr-note" hidden></p>
   </div>
 </div>
 
@@ -644,8 +648,9 @@
   const input = { x: 0, z: 0, sprint: false, jump: false };
 
   function updatePlayer(dt) {
-    const fwd = new V3(-Math.sin(yaw), 0, -Math.cos(yaw));
-    const right = new V3(Math.cos(yaw), 0, -Math.sin(yaw));
+    const moveYaw = vrActive ? headsetYaw() : yaw; // in VR, walk where your head points
+    const fwd = new V3(-Math.sin(moveYaw), 0, -Math.cos(moveYaw));
+    const right = new V3(Math.cos(moveYaw), 0, -Math.sin(moveYaw));
     const wish = fwd.multiplyScalar(input.z).add(right.multiplyScalar(input.x));
     if (wish.lengthSq() > 1) wish.normalize();
     wish.multiplyScalar(input.sprint ? 8 : 5);
@@ -692,20 +697,20 @@
 
     if (player.pos.y < -10) { player.pos.set(0, 0, -10); player.vy = 0; }
 
-    head.position.set(player.pos.x, player.pos.y + 1.55, player.pos.z);
+    // In VR the headset adds your real height, so the rig sits at your feet.
+    head.position.set(player.pos.x, player.pos.y + (vrActive ? 0 : 1.55), player.pos.z);
     head.rotation.y = yaw;
-    camera.rotation.x = pitch;
+    if (!vrActive) camera.rotation.x = pitch;
   }
 
   // ---------- Toy physics ----------
   const camPos = new V3(), camDir = new V3();
 
   function updateToys(dt) {
-    camera.getWorldPosition(camPos);
-    camera.getWorldDirection(camDir);
+    aimRay(holdController);
     for (const t of toys) {
       if (t.held) {
-        const holdPoint = camPos.clone().addScaledVector(camDir, 1.6);
+        const holdPoint = camPos.clone().addScaledVector(camDir, vrActive ? 0.5 : 1.6);
         t.vel.copy(holdPoint).sub(t.pos).multiplyScalar(14).clampLength(0, 25);
       } else {
         t.vel.y -= GRAVITY * dt;
@@ -737,25 +742,39 @@
   // ---------- Grab, throw, shoot ----------
   const ray = new THREE.Raycaster();
 
-  function aimHit(maxDistance, objects) {
-    camera.getWorldPosition(camPos);
-    camera.getWorldDirection(camDir);
+  // Where you're aiming from: your eyes on a screen, or a controller in VR.
+  const aimQuat = new THREE.Quaternion();
+  function aimRay(controller) {
+    const c = vrActive ? (controller || gunController) : null;
+    if (c) {
+      c.getWorldPosition(camPos);
+      c.getWorldQuaternion(aimQuat);
+      camDir.set(0, 0, -1).applyQuaternion(aimQuat);
+    } else {
+      camera.getWorldPosition(camPos);
+      camera.getWorldDirection(camDir);
+    }
+  }
+
+  function aimHit(maxDistance, objects, controller) {
+    aimRay(controller);
     ray.set(camPos, camDir);
     ray.far = maxDistance;
     return ray.intersectObjects(objects, false)[0] || null;
   }
 
-  function toggleGrab() {
+  function toggleGrab(controller) {
     if (held) { held.held = false; held = null; return; }
-    const hit = aimHit(3.2, toys.map(t => t.mesh).concat(solidMeshes));
+    const hit = aimHit(3.2, toys.map(t => t.mesh).concat(solidMeshes), controller);
     if (hit && hit.object.userData.toy) {
       held = hit.object.userData.toy;
       held.held = true;
+      holdController = controller || null;
     }
   }
 
   function throwHeld() {
-    camera.getWorldDirection(camDir);
+    aimRay(holdController);
     held.vel.copy(camDir).multiplyScalar(14);
     held.vel.y += 1.5;
     held.held = false;
@@ -916,6 +935,8 @@
 
   let toastTimer = 0;
   function toast(text) {
+    boardMsg = text;
+    boardMsgUntil = performance.now() + 1200;
     const el = $('toast');
     el.textContent = text;
     el.classList.add('show');
@@ -935,7 +956,7 @@
   function saveBest(v) { try { localStorage.setItem('paintRoomBest', String(v)); } catch (e) { /* storage blocked */ } }
 
   function lockPointer() {
-    if (!pointerLockWorks) return;
+    if (!pointerLockWorks || vrActive) return;
     try {
       const result = renderer.domElement.requestPointerLock();
       if (result && result.catch) result.catch(() => { pointerLockWorks = false; });
@@ -1014,7 +1035,7 @@
     keys[e.code] = true;
   });
   window.addEventListener('keyup', (e) => { keys[e.code] = false; });
-  window.addEventListener('blur', () => { if (!isTouch) pause(); });
+  window.addEventListener('blur', () => { if (!isTouch && !vrActive) pause(); });
 
   function lookBy(dx, dy, sensitivity) {
     yaw -= dx * sensitivity;
@@ -1099,6 +1120,151 @@
   touchButton('t-jump', () => { input.jump = true; });
   touchButton('t-color', nextColor);
 
+  // ---------- Scoreboard on the wall ----------
+  // Screen menus don't show inside a VR headset, so the score, time and messages are also painted
+  // on a big board above the targets.
+  const boardCanvas = document.createElement('canvas');
+  boardCanvas.width = 1024;
+  boardCanvas.height = 256;
+  const boardTex = new THREE.CanvasTexture(boardCanvas);
+  const board = new THREE.Mesh(new THREE.PlaneGeometry(7, 1.75), new THREE.MeshBasicMaterial({ map: boardTex }));
+  board.position.set(0, 4.95, 14.94);
+  board.rotation.y = Math.PI;
+  scene.add(board);
+  let boardKey = '', boardMsg = '', boardMsgUntil = 0;
+
+  function drawBoard() {
+    const msg = performance.now() < boardMsgUntil ? boardMsg : '';
+    let top, bottom;
+    if (state === 'playing' || state === 'paused') {
+      top = 'SCORE ' + score + '     TIME ' + Math.max(0, Math.ceil(timeLeft));
+      bottom = msg || 'Splat the targets!';
+    } else if (state === 'over') {
+      top = 'TIME\'S UP!  SCORE ' + score;
+      bottom = vrActive ? 'Pull the trigger to play again' : 'Nice round!';
+    } else {
+      top = 'PAINT ROOM';
+      bottom = vrActive ? 'Pull the trigger to start' : 'Press Play to start';
+    }
+    const key = top + '|' + bottom;
+    if (key === boardKey) return;
+    boardKey = key;
+    const g = boardCanvas.getContext('2d');
+    g.fillStyle = '#1d1b3a';
+    g.fillRect(0, 0, 1024, 256);
+    g.strokeStyle = '#ffd23f';
+    g.lineWidth = 10;
+    g.strokeRect(10, 10, 1004, 236);
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = '#ffd23f';
+    g.font = '88px "Lilita One", "Trebuchet MS", sans-serif';
+    g.fillText(top, 512, 96, 960);
+    g.fillStyle = '#ffffff';
+    g.font = '52px "Lilita One", "Trebuchet MS", sans-serif';
+    g.fillText(bottom, 512, 190, 960);
+    boardTex.needsUpdate = true;
+  }
+
+  // ---------- VR (Meta Quest and other WebXR headsets) ----------
+  // Left stick walks, right stick turns, trigger shoots, grip grabs,
+  // A jumps, B changes paint color.
+  let vrActive = false, gunController = null, holdController = null;
+  const vrPrev = { a: false, b: false, turn: 0 };
+  renderer.xr.enabled = true;
+
+  const rayGeo = new THREE.BufferGeometry().setFromPoints([new V3(0, 0, 0), new V3(0, 0, -1)]);
+  for (let i = 0; i < 2; i++) {
+    const c = renderer.xr.getController(i);
+    head.add(c);
+    const line = new THREE.Line(rayGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
+    line.scale.z = 4;
+    c.add(line);
+    c.add(new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 8), material(0xffffff)));
+    c.addEventListener('connected', (e) => {
+      if (e.data && (e.data.handedness === 'right' || !gunController)) attachGun(c);
+    });
+    c.addEventListener('disconnected', () => { if (gunController === c) gunController = null; });
+    c.addEventListener('selectstart', () => {
+      if (state === 'playing') fire();
+      else if (state !== 'paused') startRound();
+    });
+    c.addEventListener('squeezestart', () => { if (state === 'playing') toggleGrab(c); });
+  }
+
+  function attachGun(c) {
+    gunController = c;
+    c.add(gun);
+    gun.position.set(0, -0.03, 0.12);
+    gun.scale.setScalar(0.9);
+  }
+
+  const headQuat = new THREE.Quaternion(), headPos = new V3(), headScale = new V3();
+  function headsetYaw() {
+    renderer.xr.getCamera(camera).matrixWorld.decompose(headPos, headQuat, headScale);
+    const d = new V3(0, 0, -1).applyQuaternion(headQuat);
+    return Math.atan2(-d.x, -d.z);
+  }
+
+  function readVRInput() {
+    input.x = input.z = 0;
+    input.sprint = false;
+    const session = renderer.xr.getSession();
+    if (!session) return;
+    for (const src of session.inputSources) {
+      const gp = src.gamepad;
+      if (!gp) continue;
+      const sx = gp.axes.length >= 4 ? gp.axes[2] : (gp.axes[0] || 0);
+      const sy = gp.axes.length >= 4 ? gp.axes[3] : (gp.axes[1] || 0);
+      const pressed = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
+      if (src.handedness === 'left') {
+        if (Math.hypot(sx, sy) > 0.15) { input.x = sx; input.z = -sy; }
+        input.sprint = pressed(3); // click the stick to sprint
+      } else {
+        // Snap turn: flick the right stick to turn 30 degrees.
+        if (Math.abs(sx) > 0.6 && vrPrev.turn === 0) { yaw -= Math.sign(sx) * Math.PI / 6; vrPrev.turn = Math.sign(sx); }
+        else if (Math.abs(sx) < 0.3) vrPrev.turn = 0;
+        const a = pressed(4), b = pressed(5);
+        if (a && !vrPrev.a) input.jump = true;
+        if (b && !vrPrev.b) nextColor();
+        vrPrev.a = a;
+        vrPrev.b = b;
+      }
+    }
+  }
+
+  async function enterVR() {
+    try {
+      const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] });
+      renderer.xr.setReferenceSpaceType('local-floor');
+      await renderer.xr.setSession(session);
+      vrActive = true;
+      pitch = 0;
+      session.addEventListener('end', leaveVR);
+      startRound();
+    } catch (e) {
+      $('vr-note').textContent = 'VR couldn\'t start here. Open the game in your headset\'s web browser and try again.';
+      $('vr-note').hidden = false;
+    }
+  }
+
+  function leaveVR() {
+    vrActive = false;
+    gunController = holdController = null;
+    camera.add(gun);
+    gun.position.set(0.3, -0.28, -0.62);
+    gun.scale.setScalar(0.6);
+    camera.position.set(0, 0, 0);
+    camera.quaternion.identity();
+    camera.scale.set(1, 1, 1);
+    if (state === 'playing') pause();
+  }
+
+  $('enter-vr').addEventListener('click', enterVR);
+  if (navigator.xr && navigator.xr.isSessionSupported) {
+    navigator.xr.isSessionSupported('immersive-vr').then((ok) => { $('enter-vr').hidden = !ok; }).catch(() => {});
+  }
+
   // ---------- Main loop ----------
   let last = performance.now();
   let clock = 0;
@@ -1108,7 +1274,9 @@
     last = now;
 
     if (state === 'playing') {
-      if (!isTouch) {
+      if (vrActive) {
+        readVRInput();
+      } else if (!isTouch) {
         input.x = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
         input.z = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
         input.sprint = !!(keys.ShiftLeft || keys.ShiftRight);
@@ -1133,11 +1301,11 @@
       sharePresence(false);
     }
 
+    drawBoard();
     renderer.render(scene, camera);
-    requestAnimationFrame(frame);
   }
   updatePlayer(0);
-  requestAnimationFrame(frame);
+  renderer.setAnimationLoop(frame); // works on a normal screen and inside a VR headset
 
   // ---------- Your avatar ----------
   const AVATAR_KEY = 'paintRoomAvatar';
